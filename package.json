@@ -1,0 +1,37 @@
+{
+  "name": "sherlly-assistant",
+  "productName": "Sherlly Assistant",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Sherlly Assistant keeps work items from WeChat and manual notes inside a visible task loop.",
+  "main": "electron/main.cjs",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1 --port 5188",
+    "server": "node server/index.cjs",
+    "start": "node server/index.cjs",
+    "desktop": "node scripts/start-desktop.cjs",
+    "cf:dev": "wrangler dev",
+    "cf:deploy": "wrangler deploy",
+    "cf:kv:create": "wrangler kv namespace create SHERLLY_DATA",
+    "cf:secret:token": "wrangler secret put SHERLLY_API_TOKEN",
+    "build": "vite build",
+    "preview": "vite preview",
+    "check": "node --check electron/main.cjs && node --check electron/preload.cjs && node --check scripts/check-project.cjs && node --check scripts/start-desktop.cjs && node --check server/index.cjs && node scripts/check-project.cjs"
+  },
+  "dependencies": {
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "lucide-react": "^0.468.0",
+    "mongodb": "^7.2.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "electron": "^33.2.1",
+    "vite": "^5.4.11",
+    "wrangler": "^4.97.0"
+  }
+}

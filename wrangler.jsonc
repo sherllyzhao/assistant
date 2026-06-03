@@ -1,0 +1,20 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "sherlly-server",
+  "main": "cloudflare/worker.js",
+  "compatibility_date": "2026-06-03",
+  "observability": {
+    "enabled": true
+  },
+  "kv_namespaces": [
+    {
+      "binding": "SHERLLY_DATA",
+      "id": "replace-with-sherlly-data-kv-namespace-id",
+      "preview_id": "replace-with-sherlly-data-preview-kv-namespace-id"
+    }
+  ],
+  "vars": {
+    "SHERLLY_USER_ID": "default",
+    "CORS_ORIGIN": "*"
+  }
+}

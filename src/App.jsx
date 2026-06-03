@@ -1,0 +1,1363 @@
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  Bell,
+  CalendarClock,
+  CheckCircle2,
+  ClipboardList,
+  Clock3,
+  FileText,
+  Filter,
+  Inbox,
+  ListChecks,
+  Megaphone,
+  MessageSquareText,
+  Paperclip,
+  Plus,
+  Save,
+  Search,
+  Trash2,
+  Volume2,
+  VolumeX,
+  X,
+} from "lucide-react";
+import {
+  candidateToDraft,
+  createLog,
+  createTask,
+  dailySlots,
+  detectCandidatesFromText,
+  createDailyReport,
+  createAttachment,
+  emptyTaskDraft,
+  filterLogsByRange,
+  formatDateTime,
+  getDailyProgress,
+  getPriorityMeta,
+  getReminderLeadMinutes,
+  getStatusMeta,
+  getTaskReminderAt,
+  isOverdue,
+  launchActionTypes,
+  logRanges,
+  normalizeLaunchAction,
+  normalizeAttachments,
+  normalizeDailyTarget,
+  normalizeDailySlots,
+  priorities,
+  shouldRemindCandidate,
+  shouldRemindTask,
+  taskStatuses,
+  toDateTimeInputValue,
+} from "./lib/domain.js";
+import {
+  initialData,
+  isSameData,
+  launchAction,
+  loadAppData,
+  mergeData,
+  saveAppData,
+  sendNotification,
+  selectAttachments,
+  openAttachment,
+} from "./lib/storage.js";
+
+const filterOptions = [
+  { value: "active", label: "未完成" },
+  { value: "all", label: "全部" },
+  { value: "todo", label: "待办" },
+  { value: "doing", label: "进行中" },
+  { value: "waiting", label: "等待他人" },
+  { value: "done", label: "已完成" },
+];
+
+const viewOptions = [
+  { value: "tasks", label: "任务看板", description: "录入、筛选和推进待办" },
+  { value: "report", label: "工作日报", description: "查看日报概览与日志明细" },
+];
+
+const cloudSyncEnabled = Boolean(import.meta.env.VITE_SHERLLY_API_URL);
+
+function App() {
+  const [data, setData] = useState(initialData);
+  const [draft, setDraft] = useState(emptyTaskDraft);
+  const [editingId, setEditingId] = useState("");
+  const [wechatText, setWechatText] = useState("");
+  const [activeView, setActiveView] = useState("tasks");
+  const [taskFilter, setTaskFilter] = useState("active");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [logRange, setLogRange] = useState("today");
+  const [reminderAlerts, setReminderAlerts] = useState([]);
+  const [isLoaded, setIsLoaded] = useState(false);
+  const [isDraggingText, setIsDraggingText] = useState(false);
+  const saveTimerRef = useRef(0);
+  const titleInputRef = useRef(null);
+
+  useEffect(() => {
+    loadAppData()
+      .then((loadedData) => {
+        setData(loadedData);
+        setIsLoaded(true);
+      })
+      .catch((error) => {
+        console.error(error);
+        setIsLoaded(true);
+      });
+  }, []);
+
+  useEffect(() => {
+    if (!isLoaded) {
+      return;
+    }
+
+    window.clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = window.setTimeout(() => {
+      saveAppData(data).catch((error) => console.error(error));
+    }, 250);
+
+    return () => window.clearTimeout(saveTimerRef.current);
+  }, [data, isLoaded]);
+
+  useEffect(() => {
+    if (!isLoaded || !cloudSyncEnabled) {
+      return;
+    }
+
+    let isCancelled = false;
+
+    const syncFromCloud = () => {
+      loadAppData()
+        .then((cloudData) => {
+          if (isCancelled) {
+            return;
+          }
+
+          setData((current) => {
+            const mergedData = mergeData(cloudData, current);
+            return isSameData(current, mergedData) ? current : mergedData;
+          });
+        })
+        .catch((error) => console.error(error));
+    };
+
+    syncFromCloud();
+    const intervalId = window.setInterval(syncFromCloud, 5000);
+
+    return () => {
+      isCancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [isLoaded]);
+
+  useEffect(() => {
+    const handleQuickCapture = () => activateQuickCapture("快捷键速记");
+    const handleKeyDown = (event) => {
+      const key = event.key.toLowerCase();
+
+      if ((event.ctrlKey || event.metaKey) && event.altKey && key === "s") {
+        event.preventDefault();
+        handleQuickCapture();
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    const unsubscribeQuickCapture = window.sherlly?.onQuickCapture?.(handleQuickCapture);
+
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      unsubscribeQuickCapture?.();
+    };
+  }, [editingId]);
+
+  useEffect(() => {
+    if (!isLoaded) {
+      return;
+    }
+
+    const checkReminders = () => {
+      const now = new Date();
+      const remindedTaskIds = [];
+      const remindedCandidateIds = [];
+
+      for (const task of data.tasks) {
+        if (shouldRemindTask(task, now)) {
+          remindedTaskIds.push(task.id);
+          notifyWithFallback({
+            id: `task_${task.id}_${now.getTime()}`,
+            title: `${getPriorityMeta(task.priority).label}提醒`,
+            body: `${task.title} · ${formatDateTime(task.dueAt)}`,
+            sound: data.settings.soundEnabled,
+            flash: true,
+          });
+        }
+      }
+
+      for (const candidate of data.candidates) {
+        if (shouldRemindCandidate(candidate, now)) {
+          remindedCandidateIds.push(candidate.id);
+          notifyWithFallback({
+            id: `candidate_${candidate.id}_${now.getTime()}`,
+            title: "发现可能遗漏的事项",
+            body: candidate.text,
+            sound: data.settings.soundEnabled,
+            flash: true,
+          });
+        }
+      }
+
+      if (remindedTaskIds.length === 0 && remindedCandidateIds.length === 0) {
+        return;
+      }
+
+      setData((current) => ({
+        ...current,
+        tasks: current.tasks.map((task) =>
+          remindedTaskIds.includes(task.id) ? { ...task, lastRemindedAt: now.toISOString() } : task,
+        ),
+        candidates: current.candidates.map((candidate) =>
+          remindedCandidateIds.includes(candidate.id)
+            ? { ...candidate, remindedAt: now.toISOString() }
+            : candidate,
+        ),
+      }));
+    };
+
+    checkReminders();
+    const intervalId = window.setInterval(checkReminders, 60 * 1000);
+    return () => window.clearInterval(intervalId);
+  }, [data, isLoaded]);
+
+  const taskStats = useMemo(() => {
+    const activeTasks = data.tasks.filter((task) => !["done", "cancelled"].includes(task.status));
+    const now = new Date();
+
+    return {
+      active: activeTasks.length,
+      overdue: activeTasks.filter((task) => isOverdue(task, now)).length,
+      waiting: data.tasks.filter((task) => task.status === "waiting").length,
+      done: data.tasks.filter((task) => task.status === "done").length,
+    };
+  }, [data.tasks]);
+
+  const filteredTasks = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+
+    return data.tasks
+      .filter((task) => {
+        if (taskFilter === "active") {
+          return !["done", "cancelled"].includes(task.status);
+        }
+
+        if (taskFilter === "all") {
+          return true;
+        }
+
+        return task.status === taskFilter;
+      })
+      .filter((task) => {
+        if (!query) {
+          return true;
+        }
+
+        const attachmentText = normalizeAttachments(task.attachments)
+          .map((attachment) => attachment.name)
+          .join(" ");
+        const searchable = [task.title, task.source, task.owner, task.note, task.tags.join(" "), attachmentText]
+          .join(" ")
+          .toLowerCase();
+        return searchable.includes(query);
+      })
+      .sort((a, b) => {
+        const priorityScore = { high: 0, normal: 1, low: 2 };
+        const dueA = a.dueAt ? new Date(a.dueAt).getTime() : Number.MAX_SAFE_INTEGER;
+        const dueB = b.dueAt ? new Date(b.dueAt).getTime() : Number.MAX_SAFE_INTEGER;
+        return priorityScore[a.priority] - priorityScore[b.priority] || dueA - dueB;
+      });
+  }, [data.tasks, searchQuery, taskFilter]);
+
+  const visibleLogs = useMemo(
+    () => filterLogsByRange(data.logs, logRange).slice().reverse(),
+    [data.logs, logRange],
+  );
+
+  const dailyReport = useMemo(
+    () => createDailyReport(data.tasks, data.logs, logRange),
+    [data.tasks, data.logs, logRange],
+  );
+  const selectedDraftSlots = useMemo(
+    () => normalizeDailySlots(draft.dailySlotValues, draft.dailyTarget),
+    [draft.dailySlotValues, draft.dailyTarget],
+  );
+  const draftAttachments = useMemo(
+    () => normalizeAttachments(draft.attachments),
+    [draft.attachments],
+  );
+
+  function pushReminderAlert(alert) {
+    const createdAt = new Date().toISOString();
+
+    setReminderAlerts((current) =>
+      [
+        {
+          id: alert.id || `alert_${Date.now()}_${Math.random().toString(16).slice(2)}`,
+          title: alert.title || "任务提醒",
+          body: alert.body || "",
+          createdAt,
+        },
+        ...current,
+      ].slice(0, 6),
+    );
+  }
+
+  function dismissReminderAlert(alertId) {
+    setReminderAlerts((current) => current.filter((alert) => alert.id !== alertId));
+  }
+
+  function notifyWithFallback(payload) {
+    pushReminderAlert(payload);
+    sendNotification(payload).catch((error) => console.error(error));
+  }
+
+  function testReminder() {
+    notifyWithFallback({
+      title: "测试提醒",
+      body: "如果你能看到这条，应用内提醒已经生效；系统通知取决于 Windows/浏览器权限。",
+      sound: data.settings.soundEnabled,
+      flash: true,
+    });
+  }
+
+  function focusTaskTitle() {
+    titleInputRef.current?.scrollIntoView({ block: "center", behavior: "smooth" });
+    titleInputRef.current?.focus();
+  }
+
+  function activateQuickCapture(source = "快捷键速记") {
+    setActiveView("tasks");
+    setTaskFilter("active");
+
+    if (!editingId) {
+      setDraft((current) => ({
+        ...current,
+        source: current.title || current.note ? current.source : source,
+      }));
+    }
+
+    window.requestAnimationFrame(focusTaskTitle);
+  }
+
+  function hasTextTransfer(event) {
+    return Array.from(event.dataTransfer?.types || []).some((type) => type === "text/plain" || type === "text");
+  }
+
+  function createDraggedTask(text) {
+    const cleanText = String(text || "").trim();
+
+    if (!cleanText) {
+      return;
+    }
+
+    const firstLine = cleanText
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find(Boolean);
+    const task = createTask({
+      ...emptyTaskDraft,
+      title: (firstLine || cleanText).slice(0, 60),
+      source: "拖拽文本",
+      note: cleanText,
+    });
+
+    setData((current) => ({
+      ...current,
+      tasks: [task, ...current.tasks],
+      logs: [...current.logs, createLog("创建任务", task, "拖拽文本创建任务")],
+    }));
+  }
+
+  function handleTextDragOver(event) {
+    if (!hasTextTransfer(event)) {
+      return;
+    }
+
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+    setIsDraggingText(true);
+  }
+
+  function handleTextDragLeave(event) {
+    const relatedTarget = event.relatedTarget;
+
+    if (!relatedTarget || !event.currentTarget.contains(relatedTarget)) {
+      setIsDraggingText(false);
+    }
+  }
+
+  function handleTextDrop(event) {
+    if (!hasTextTransfer(event)) {
+      return;
+    }
+
+    event.preventDefault();
+    setIsDraggingText(false);
+    createDraggedTask(event.dataTransfer.getData("text/plain") || event.dataTransfer.getData("text"));
+  }
+
+  function updateDraft(field, value) {
+    setDraft((current) => ({ ...current, [field]: value }));
+  }
+
+  async function addDraftAttachments() {
+    const result = await selectAttachments();
+
+    if (!result?.ok) {
+      notifyWithFallback({
+        title: "无法选择附件",
+        body: result?.message || "请在 Electron 桌面端选择本机图片或文件。",
+        sound: false,
+        flash: false,
+      });
+      return;
+    }
+
+    const nextAttachments = (result.filePaths || []).map((filePath) => createAttachment(filePath));
+
+    if (nextAttachments.length === 0) {
+      return;
+    }
+
+    setDraft((current) => {
+      const currentAttachments = normalizeAttachments(current.attachments);
+      const existingPaths = new Set(currentAttachments.map((attachment) => attachment.path));
+      const uniqueAttachments = nextAttachments.filter((attachment) => !existingPaths.has(attachment.path));
+
+      return {
+        ...current,
+        attachments: [...currentAttachments, ...uniqueAttachments],
+      };
+    });
+  }
+
+  function removeDraftAttachment(attachmentId) {
+    setDraft((current) => ({
+      ...current,
+      attachments: normalizeAttachments(current.attachments).filter((attachment) => attachment.id !== attachmentId),
+    }));
+  }
+
+  async function openTaskAttachment(attachment) {
+    const result = await openAttachment(attachment.path);
+
+    if (!result?.ok) {
+      notifyWithFallback({
+        title: "无法打开附件",
+        body: result?.message || attachment.name,
+        sound: false,
+        flash: false,
+      });
+    }
+  }
+
+  function toggleDraftSlot(slotValue) {
+    setDraft((current) => {
+      const currentSlots = normalizeDailySlots(current.dailySlotValues, current.dailyTarget);
+      const nextSlots = currentSlots.includes(slotValue)
+        ? currentSlots.filter((value) => value !== slotValue)
+        : [...currentSlots, slotValue];
+
+      return {
+        ...current,
+        dailySlotValues: nextSlots,
+        dailyTarget: nextSlots.length,
+      };
+    });
+  }
+
+  function clearDraftSlots() {
+    setDraft((current) => ({
+      ...current,
+      dailySlotValues: [],
+      dailyTarget: 0,
+    }));
+  }
+
+  function updateDraftLaunchAction(field, value) {
+    setDraft((current) => ({
+      ...current,
+      launchAction: {
+        ...current.launchAction,
+        [field]: value,
+      },
+    }));
+  }
+
+  function resetDraft() {
+    setDraft(emptyTaskDraft);
+    setEditingId("");
+  }
+
+  function submitTask(event) {
+    event.preventDefault();
+
+    if (!draft.title.trim()) {
+      return;
+    }
+
+    if (editingId) {
+      setData((current) => {
+        let updatedTask = null;
+        const tasks = current.tasks.map((task) => {
+          if (task.id !== editingId) {
+            return task;
+          }
+
+          const dailySlotValues = normalizeDailySlots(draft.dailySlotValues, draft.dailyTarget);
+
+          updatedTask = {
+            ...task,
+            title: draft.title.trim(),
+            source: draft.source.trim(),
+            owner: draft.owner.trim(),
+            dueAt: draft.dueAt ? new Date(draft.dueAt).toISOString() : "",
+            dailySlots: dailySlotValues,
+            dailyTarget: dailySlotValues.length,
+            launchAction: normalizeLaunchAction(draft.launchAction),
+            priority: draft.priority,
+            status: draft.status,
+            tags: draft.tags
+              .split(/[,，\s]+/)
+              .map((tag) => tag.trim())
+              .filter(Boolean),
+            note: draft.note.trim(),
+            attachments: normalizeAttachments(draft.attachments),
+            updatedAt: new Date().toISOString(),
+          };
+
+          return updatedTask;
+        });
+
+        return {
+          ...current,
+          tasks,
+          logs: updatedTask
+            ? [...current.logs, createLog("修改任务", updatedTask, "更新任务属性")]
+            : current.logs,
+        };
+      });
+      resetDraft();
+      return;
+    }
+
+    const task = createTask(draft);
+    setData((current) => ({
+      ...current,
+      tasks: [task, ...current.tasks],
+      logs: [...current.logs, createLog("创建任务", task, "手动录入")],
+    }));
+    resetDraft();
+  }
+
+  function editTask(task) {
+    setActiveView("tasks");
+    setEditingId(task.id);
+    setDraft({
+      title: task.title,
+      source: task.source,
+      owner: task.owner,
+      dueAt: toDateTimeInputValue(task.dueAt),
+      dailyTarget: normalizeDailyTarget(task.dailyTarget),
+      dailySlotValues: normalizeDailySlots(task.dailySlots, task.dailyTarget),
+      launchAction: normalizeLaunchAction(task.launchAction),
+      priority: task.priority,
+      status: task.status,
+      tags: task.tags.join(" "),
+      note: task.note,
+      attachments: normalizeAttachments(task.attachments),
+    });
+  }
+
+  function changeTaskStatus(task, status) {
+    const updatedTask = {
+      ...task,
+      status,
+      updatedAt: new Date().toISOString(),
+    };
+    const action = status === "done" ? "完成任务" : status === "cancelled" ? "删除任务" : "修改任务";
+
+    setData((current) => ({
+      ...current,
+      tasks: current.tasks.map((item) => (item.id === task.id ? updatedTask : item)),
+      logs: [...current.logs, createLog(action, updatedTask, `状态变更为${getStatusMeta(status).label}`)],
+    }));
+  }
+
+  async function startTask(task) {
+    const action = normalizeLaunchAction(task.launchAction);
+    const now = new Date();
+
+    if (action.type === "none") {
+      const updatedTask = {
+        ...task,
+        status: task.status === "done" ? task.status : "doing",
+        updatedAt: now.toISOString(),
+      };
+
+      setData((current) => ({
+        ...current,
+        tasks: current.tasks.map((item) => (item.id === task.id ? updatedTask : item)),
+        logs: [...current.logs, createLog("开始执行任务", updatedTask, "未配置执行动作，已标记为进行中", now)],
+      }));
+
+      notifyWithFallback({
+        title: "已开始执行任务",
+        body: `${task.title} · 未配置打开动作，已标记为进行中。`,
+        sound: false,
+        flash: false,
+      });
+      return;
+    }
+
+    const result = await launchAction(action);
+    const detail = result?.ok
+      ? `打开${launchActionTypes.find((item) => item.value === action.type)?.label || "执行动作"}：${action.target}`
+      : `执行失败：${result?.message || "未知错误"}`;
+    const updatedTask = result?.ok
+      ? {
+          ...task,
+          status: task.status === "done" ? task.status : "doing",
+          updatedAt: now.toISOString(),
+        }
+      : task;
+
+    setData((current) => ({
+      ...current,
+      tasks: result?.ok ? current.tasks.map((item) => (item.id === task.id ? updatedTask : item)) : current.tasks,
+      logs: [...current.logs, createLog(result?.ok ? "开始执行任务" : "修改任务", updatedTask, detail, now)],
+    }));
+
+    notifyWithFallback({
+      title: result?.ok ? "已开始执行任务" : "执行动作失败",
+      body: result?.ok ? task.title : detail,
+      sound: false,
+      flash: !result?.ok,
+    });
+  }
+
+  function completeTaskOnce(task) {
+    const now = new Date();
+    const progressBefore = getDailyProgress(task, now);
+
+    if (!progressBefore.isScheduled) {
+      changeTaskStatus(task, "done");
+      return;
+    }
+
+    const slot = progressBefore.slotStates.find((item) => item.isAvailable);
+
+    if (!slot) {
+      return;
+    }
+
+    const completionRecord = {
+      id: `${task.id}_completion_${now.getTime()}`,
+      completedAt: now.toISOString(),
+      slot: slot.value,
+    };
+    const updatedRecords = [...(Array.isArray(task.completionRecords) ? task.completionRecords : []), completionRecord];
+    const taskWithRecord = {
+      ...task,
+      completionRecords: updatedRecords,
+    };
+    const progress = getDailyProgress(taskWithRecord, now);
+    const updatedTask = {
+      ...taskWithRecord,
+      status: task.status,
+      updatedAt: now.toISOString(),
+    };
+
+    setData((current) => ({
+      ...current,
+      tasks: current.tasks.map((item) => (item.id === task.id ? updatedTask : item)),
+      logs: [
+        ...current.logs,
+        createLog(
+          progress.isReached ? "完成任务" : "修改任务",
+          updatedTask,
+          `${slot.label}完成，今日完成 ${progress.done}/${progress.target} 次，错过 ${progress.missed} 次`,
+          now,
+        ),
+      ],
+    }));
+  }
+
+  function deleteTask(task) {
+    setData((current) => ({
+      ...current,
+      tasks: current.tasks.filter((item) => item.id !== task.id),
+      logs: [...current.logs, createLog("删除任务", task, "从任务列表移除")],
+    }));
+
+    if (editingId === task.id) {
+      resetDraft();
+    }
+  }
+
+  function detectWechatTasks() {
+    const detected = detectCandidatesFromText(wechatText);
+
+    if (detected.length === 0) {
+      return;
+    }
+
+    setData((current) => ({
+      ...current,
+      candidates: [...detected, ...current.candidates],
+    }));
+    setWechatText("");
+  }
+
+  function confirmCandidate(candidate) {
+    const task = createTask(candidateToDraft(candidate));
+
+    setData((current) => ({
+      ...current,
+      tasks: [task, ...current.tasks],
+      candidates: current.candidates.filter((item) => item.id !== candidate.id),
+      logs: [...current.logs, createLog("创建任务", task, "候选任务确认入库")],
+    }));
+  }
+
+  function dismissCandidate(candidate) {
+    setData((current) => ({
+      ...current,
+      candidates: current.candidates.filter((item) => item.id !== candidate.id),
+      logs: [...current.logs, createLog("删除任务", { title: candidate.text }, "候选任务忽略")],
+    }));
+  }
+
+  function toggleSound() {
+    setData((current) => ({
+      ...current,
+      settings: {
+        ...current.settings,
+        soundEnabled: !current.settings.soundEnabled,
+      },
+    }));
+  }
+
+  return (
+    <main className="app-shell">
+      <header className="topbar">
+        <div>
+          <p className="eyebrow">Sherlly Assistant</p>
+          <h1>工作事项闭环</h1>
+        </div>
+        <div className="topbar-actions">
+          <button className="icon-button" type="button" onClick={toggleSound} title="切换声音提醒">
+            {data.settings.soundEnabled ? <Volume2 size={18} /> : <VolumeX size={18} />}
+          </button>
+          <button className="secondary-button reminder-test-button" type="button" onClick={testReminder}>
+            <Bell size={18} />
+            测试提醒
+          </button>
+          <button className="primary-button" type="button" onClick={() => activateQuickCapture("手动录入")}>
+            <Plus size={18} />
+            <span>新任务</span>
+            <kbd>Ctrl+Alt+S</kbd>
+          </button>
+        </div>
+      </header>
+
+      {reminderAlerts.length > 0 ? (
+        <section className="reminder-alerts" aria-label="提醒消息">
+          {reminderAlerts.map((alert) => (
+            <article className="reminder-alert" key={alert.id}>
+              <Bell size={18} />
+              <div>
+                <strong>{alert.title}</strong>
+                <p>{alert.body}</p>
+                <span>{formatDateTime(alert.createdAt)}</span>
+              </div>
+              <button className="icon-button" type="button" onClick={() => dismissReminderAlert(alert.id)} title="关闭提醒">
+                <X size={16} />
+              </button>
+            </article>
+          ))}
+        </section>
+      ) : null}
+
+      <section className="metrics-grid" aria-label="任务概览">
+        <Metric icon={<ListChecks size={20} />} label="未完成" value={taskStats.active} />
+        <Metric icon={<Bell size={20} />} label="已逾期" value={taskStats.overdue} tone="danger" />
+        <Metric icon={<Clock3 size={20} />} label="等待他人" value={taskStats.waiting} />
+        <Metric icon={<CheckCircle2 size={20} />} label="已完成" value={taskStats.done} tone="success" />
+      </section>
+
+      <section className="view-switcher" aria-label="主入口">
+        {viewOptions.map((option) => (
+          <button
+            key={option.value}
+            className={activeView === option.value ? "is-active" : ""}
+            type="button"
+            onClick={() => setActiveView(option.value)}
+          >
+            <strong>{option.label}</strong>
+            <span>{option.description}</span>
+          </button>
+        ))}
+      </section>
+
+      <div className="workspace-grid">
+        <section className="task-area" aria-label={activeView === "tasks" ? "任务列表" : "工作日报"}>
+          {activeView === "tasks" ? (
+            <>
+              <div className="section-toolbar">
+                <div>
+                  <p className="eyebrow">Task Board</p>
+                  <h2>任务管理</h2>
+                </div>
+                <div className="search-box">
+                  <Search size={16} />
+                  <input
+                    type="search"
+                    placeholder="搜索标题、负责人、标签"
+                    value={searchQuery}
+                    onChange={(event) => setSearchQuery(event.target.value)}
+                  />
+                </div>
+              </div>
+
+              <div className="segmented-control" aria-label="任务筛选">
+                <Filter size={16} />
+                {filterOptions.map((option) => (
+                  <button
+                    key={option.value}
+                    className={taskFilter === option.value ? "is-active" : ""}
+                    type="button"
+                    onClick={() => setTaskFilter(option.value)}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+
+              <div className="task-list">
+                {filteredTasks.length === 0 ? (
+                  <EmptyState icon={<Inbox size={24} />} text="当前筛选下没有任务" />
+                ) : (
+                  filteredTasks.map((task) => (
+                    <TaskRow
+                      key={task.id}
+                      task={task}
+                      onEdit={editTask}
+                      onStatusChange={changeTaskStatus}
+                      onStart={startTask}
+                      onCompleteOnce={completeTaskOnce}
+                      onOpenAttachment={openTaskAttachment}
+                      onDelete={deleteTask}
+                    />
+                  ))
+                )}
+              </div>
+            </>
+          ) : (
+            <ReportPanel
+              dailyReport={dailyReport}
+              logRange={logRange}
+              onLogRangeChange={setLogRange}
+              visibleLogs={visibleLogs}
+            />
+          )}
+        </section>
+
+        <aside className="side-rail" aria-label="录入与候选任务">
+          <section className="panel">
+            <div className="panel-heading">
+              <div>
+                <p className="eyebrow">Capture</p>
+                <h2>{editingId ? "编辑任务" : "任务录入"}</h2>
+              </div>
+              {editingId ? (
+                <button className="icon-button" type="button" onClick={resetDraft} title="取消编辑">
+                  <X size={18} />
+                </button>
+              ) : null}
+            </div>
+
+            <div
+              className={`drop-capture ${isDraggingText ? "is-active" : ""}`}
+              onDragLeave={handleTextDragLeave}
+              onDragOver={handleTextDragOver}
+              onDrop={handleTextDrop}
+            >
+              <ClipboardList size={20} />
+              <div>
+                <strong>拖拽文本创建任务</strong>
+                <span>把微信文字拖到这里，Sherlly 会创建任务并把原文放进备注。</span>
+              </div>
+            </div>
+
+            <form className="task-form" onSubmit={submitTask}>
+              <label>
+                标题
+                <input
+                  id="task-title"
+                  ref={titleInputRef}
+                  value={draft.title}
+                  onChange={(event) => updateDraft("title", event.target.value)}
+                  placeholder="例如：周五前发报价给王总"
+                />
+              </label>
+
+              <div className="form-grid">
+                <label>
+                  来源
+                  <input value={draft.source} onChange={(event) => updateDraft("source", event.target.value)} />
+                </label>
+                <label>
+                  负责人
+                  <input
+                    value={draft.owner}
+                    onChange={(event) => updateDraft("owner", event.target.value)}
+                    placeholder="自己 / 同事 / 客户"
+                  />
+                </label>
+              </div>
+
+              <label>
+                截止时间
+                <input
+                  type="datetime-local"
+                  value={draft.dueAt}
+                  onChange={(event) => updateDraft("dueAt", event.target.value)}
+                />
+              </label>
+
+              <fieldset className="slot-fieldset">
+                <legend>每日时段（可选）</legend>
+                <div className="slot-options">
+                  <label className="slot-option" key="regular-plan">
+                    <input
+                      type="checkbox"
+                      checked={selectedDraftSlots.length === 0}
+                      onChange={clearDraftSlots}
+                    />
+                    <span>常规计划</span>
+                  </label>
+                  {dailySlots.map((slot) => {
+                    return (
+                      <label className="slot-option" key={slot.value}>
+                        <input
+                          type="checkbox"
+                          checked={selectedDraftSlots.includes(slot.value)}
+                          onChange={() => toggleDraftSlot(slot.value)}
+                        />
+                        <span>{slot.label}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+                <p>
+                  {selectedDraftSlots.length === 0
+                    ? "常规计划不显示今日进度，也不会产生错过时段。"
+                    : `已选 ${selectedDraftSlots.length} 次/天；错过某个时段后不会自动补到其他时段。`}
+                </p>
+              </fieldset>
+
+              <fieldset className="action-fieldset">
+                <legend>执行动作</legend>
+                <div className="form-grid">
+                  <label>
+                    类型
+                    <select
+                      value={draft.launchAction.type}
+                      onChange={(event) => updateDraftLaunchAction("type", event.target.value)}
+                    >
+                      {launchActionTypes.map((type) => (
+                        <option key={type.value} value={type.value}>
+                          {type.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    目标
+                    <input
+                      value={draft.launchAction.target}
+                      onChange={(event) => updateDraftLaunchAction("target", event.target.value)}
+                      placeholder="网址 / 文件夹路径 / code 命令"
+                    />
+                  </label>
+                </div>
+                <p>VSCode 项目填写项目目录，例如 E:\项目\秘书；如果 code 命令不可用，会尝试用系统默认方式打开。</p>
+              </fieldset>
+
+              <div className="form-grid">
+                <label>
+                  优先级
+                  <select value={draft.priority} onChange={(event) => updateDraft("priority", event.target.value)}>
+                    {priorities.map((priority) => (
+                      <option key={priority.value} value={priority.value}>
+                        {priority.label} · {priority.reminderMinutes}分钟
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  状态
+                  <select value={draft.status} onChange={(event) => updateDraft("status", event.target.value)}>
+                    {taskStatuses.map((status) => (
+                      <option key={status.value} value={status.value}>
+                        {status.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+
+              <label>
+                标签
+                <input
+                  value={draft.tags}
+                  onChange={(event) => updateDraft("tags", event.target.value)}
+                  placeholder="客户A 报价 合同"
+                />
+              </label>
+
+              <label>
+                备注
+                <textarea
+                  value={draft.note}
+                  onChange={(event) => updateDraft("note", event.target.value)}
+                  rows={3}
+                  placeholder="粘贴原始上下文或补充说明"
+                />
+              </label>
+
+              <fieldset className="attachment-fieldset">
+                <legend>附件</legend>
+                <button className="secondary-button full-width" type="button" onClick={addDraftAttachments}>
+                  <Paperclip size={18} />
+                  添加图片或文件
+                </button>
+                {draftAttachments.length === 0 ? (
+                  <p>暂无附件；桌面端会保存本机文件路径，可在任务卡片里直接打开。</p>
+                ) : (
+                  <div className="attachment-list">
+                    {draftAttachments.map((attachment) => (
+                      <article className="attachment-item" key={attachment.id}>
+                        <Paperclip size={16} />
+                        <div>
+                          <strong>{attachment.name}</strong>
+                          <span>{attachment.type === "image" ? "图片" : "文件"}</span>
+                        </div>
+                        <button
+                          className="icon-button danger"
+                          type="button"
+                          onClick={() => removeDraftAttachment(attachment.id)}
+                          title="移除附件"
+                        >
+                          <X size={16} />
+                        </button>
+                      </article>
+                    ))}
+                  </div>
+                )}
+              </fieldset>
+
+              <button className="primary-button full-width" type="submit">
+                <Save size={18} />
+                {editingId ? "保存修改" : "创建任务"}
+              </button>
+            </form>
+          </section>
+
+          <section className="panel">
+            <div className="panel-heading">
+              <div>
+                <p className="eyebrow">WeChat Intake</p>
+                <h2>候选任务池</h2>
+              </div>
+              <MessageSquareText size={20} />
+            </div>
+
+            <textarea
+              className="wechat-input"
+              value={wechatText}
+              onChange={(event) => setWechatText(event.target.value)}
+              rows={4}
+              placeholder="粘贴微信内容，Sherlly 会挑出疑似待办"
+            />
+            <button className="secondary-button full-width" type="button" onClick={detectWechatTasks}>
+              <ClipboardList size={18} />
+              识别待办
+            </button>
+
+            <div className="candidate-list">
+              {data.candidates.length === 0 ? (
+                <EmptyState icon={<Megaphone size={22} />} text="暂无候选事项" />
+              ) : (
+                data.candidates.map((candidate) => (
+                  <article className="candidate-item" key={candidate.id}>
+                    <p>{candidate.text}</p>
+                    <span>{formatDateTime(candidate.detectedAt)}</span>
+                    <div className="candidate-actions">
+                      <button type="button" onClick={() => confirmCandidate(candidate)}>
+                        确认入库
+                      </button>
+                      <button type="button" onClick={() => dismissCandidate(candidate)}>
+                        忽略
+                      </button>
+                    </div>
+                  </article>
+                ))
+              )}
+            </div>
+          </section>
+
+        </aside>
+      </div>
+    </main>
+  );
+}
+
+function Metric({ icon, label, value, tone = "default" }) {
+  return (
+    <article className={`metric-card tone-${tone}`}>
+      {icon}
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </article>
+  );
+}
+
+function EmptyState({ icon, text }) {
+  return (
+    <div className="empty-state">
+      {icon}
+      <span>{text}</span>
+    </div>
+  );
+}
+
+function ReportPanel({ dailyReport, visibleLogs, logRange, onLogRangeChange }) {
+  return (
+    <div className="report-panel">
+      <div className="section-toolbar report-toolbar">
+        <div>
+          <p className="eyebrow">Daily Report</p>
+          <h2>工作日报</h2>
+        </div>
+        <FileText size={20} />
+      </div>
+
+      <div className="segmented-control compact report-range" aria-label="日志范围">
+        {logRanges.map((range) => (
+          <button
+            key={range.value}
+            className={logRange === range.value ? "is-active" : ""}
+            type="button"
+            onClick={() => onLogRangeChange(range.value)}
+          >
+            {range.label}
+          </button>
+        ))}
+      </div>
+
+      <div className="daily-report">
+        <div className="report-card">
+          <strong>日报概览</strong>
+          <div className="report-metrics">
+            <span>创建 {dailyReport.metrics.created}</span>
+            <span>执行 {dailyReport.metrics.started}</span>
+            <span>完成 {dailyReport.metrics.completed}</span>
+            <span>未完成 {dailyReport.metrics.active}</span>
+            <span>等待他人 {dailyReport.metrics.waiting}</span>
+            <span>逾期 {dailyReport.metrics.overdue}</span>
+            <span>错过时段 {dailyReport.metrics.missed}</span>
+          </div>
+        </div>
+
+        <div className="report-grid">
+          <article className="report-section">
+            <strong>今日完成</strong>
+            {dailyReport.sections.completedTasks.length === 0 ? (
+              <p>今天还没有完成任务。</p>
+            ) : (
+              dailyReport.sections.completedTasks.map((task) => <span key={task.id}>{task.title}</span>)
+            )}
+          </article>
+
+          <article className="report-section">
+            <strong>未完成 / 逾期</strong>
+            {dailyReport.sections.overdueTasks.length === 0 ? (
+              <p>今天没有逾期任务。</p>
+            ) : (
+              dailyReport.sections.overdueTasks.map((task) => <span key={task.id}>{task.title}</span>)
+            )}
+          </article>
+
+          <article className="report-section">
+            <strong>等待他人</strong>
+            {dailyReport.sections.waitingTasks.length === 0 ? (
+              <p>今天没有等待他人的事项。</p>
+            ) : (
+              dailyReport.sections.waitingTasks.map((task) => <span key={task.id}>{task.title}</span>)
+            )}
+          </article>
+
+          <article className="report-section">
+            <strong>明日重点</strong>
+            {dailyReport.sections.tomorrowFocus.length === 0 ? (
+              <p>暂无重点任务。</p>
+            ) : (
+              dailyReport.sections.tomorrowFocus.map((task) => <span key={task.id}>{task.title}</span>)
+            )}
+          </article>
+        </div>
+      </div>
+
+      <h3 className="log-title">日志明细</h3>
+      <div className="log-list">
+        {visibleLogs.length === 0 ? (
+          <EmptyState icon={<FileText size={22} />} text="还没有日志记录" />
+        ) : (
+          visibleLogs.map((log) => (
+            <article className="log-item" key={log.id}>
+              <strong>{log.action}</strong>
+              <span>{formatDateTime(log.createdAt)}</span>
+              <p>{log.taskTitle || log.detail}</p>
+            </article>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
+function TaskRow({ task, onEdit, onStatusChange, onStart, onCompleteOnce, onOpenAttachment, onDelete }) {
+  const priority = getPriorityMeta(task.priority);
+  const status = getStatusMeta(task.status);
+  const overdue = isOverdue(task);
+  const dailyProgress = getDailyProgress(task);
+  const isScheduledTask = dailyProgress.isScheduled;
+  const reminderAt = getTaskReminderAt(task);
+  const taskAttachments = normalizeAttachments(task.attachments);
+  const openEditor = () => onEdit(task);
+  const stopRowClick = (event) => event.stopPropagation();
+  const handleRowKeyDown = (event) => {
+    if (event.target !== event.currentTarget) {
+      return;
+    }
+
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      openEditor();
+    }
+  };
+
+  return (
+    <article
+      className={`task-row priority-${task.priority} ${overdue ? "is-overdue" : ""}`}
+      onClick={openEditor}
+      onKeyDown={handleRowKeyDown}
+      role="button"
+      tabIndex={0}
+      aria-label={`编辑任务：${task.title}`}
+    >
+      <div className="task-main">
+        <div className="task-title-line">
+          <span className="priority-dot" aria-hidden="true" />
+          <h3>{task.title}</h3>
+        </div>
+        <div className="task-meta">
+          <span>{status.label}</span>
+          <span>{priority.label}</span>
+          <span>
+            <CalendarClock size={14} />
+            {formatDateTime(task.dueAt)}
+          </span>
+          {reminderAt ? (
+            <span>
+              <Bell size={14} />
+              提前{getReminderLeadMinutes(task)}分钟提醒 · {formatDateTime(reminderAt)}
+            </span>
+          ) : null}
+          {task.owner ? <span>{task.owner}</span> : null}
+        </div>
+        {isScheduledTask ? (
+          <>
+            <div className={`daily-progress ${dailyProgress.isReached ? "is-complete" : ""}`}>
+              <span>今日进度</span>
+              <strong>
+                {dailyProgress.done}/{dailyProgress.target}
+              </strong>
+              {dailyProgress.missed > 0 ? <em>错过 {dailyProgress.missed}</em> : null}
+            </div>
+            <div className="slot-state-list">
+              {dailyProgress.slotStates.map((slot) => (
+                <span
+                  className={[
+                    "slot-state",
+                    slot.isDone ? "is-done" : "",
+                    slot.isMissed ? "is-missed" : "",
+                    slot.isAvailable ? "is-available" : "",
+                  ]
+                    .filter(Boolean)
+                    .join(" ")}
+                  key={slot.value}
+                >
+                  {slot.label}
+                </span>
+              ))}
+            </div>
+          </>
+        ) : null}
+        {task.note ? <p className="task-note">{task.note}</p> : null}
+        {taskAttachments.length > 0 ? (
+          <div className="task-attachments" onClick={stopRowClick}>
+            {taskAttachments.map((attachment) => (
+              <button type="button" key={attachment.id} onClick={() => onOpenAttachment(attachment)}>
+                <Paperclip size={14} />
+                <span>{attachment.name}</span>
+              </button>
+            ))}
+          </div>
+        ) : null}
+        {task.tags.length > 0 ? (
+          <div className="tag-list">
+            {task.tags.map((tag) => (
+              <span key={tag}>{tag}</span>
+            ))}
+          </div>
+        ) : null}
+      </div>
+
+      <div className="task-actions" onClick={stopRowClick}>
+        <select value={task.status} onChange={(event) => onStatusChange(task, event.target.value)}>
+          {taskStatuses.map((item) => (
+            <option key={item.value} value={item.value}>
+              {item.label}
+            </option>
+          ))}
+        </select>
+        <button type="button" onClick={() => onStart(task)}>
+          开始执行
+        </button>
+        {isScheduledTask ? (
+          <button type="button" onClick={() => onCompleteOnce(task)} disabled={dailyProgress.available === 0}>
+            完成一次
+          </button>
+        ) : (
+          <button type="button" onClick={() => onStatusChange(task, "done")} disabled={task.status === "done"}>
+            完成任务
+          </button>
+        )}
+        <button className="icon-button danger" type="button" onClick={() => onDelete(task)} title="删除任务">
+          <Trash2 size={17} />
+        </button>
+      </div>
+    </article>
+  );
+}
+
+export default App;
