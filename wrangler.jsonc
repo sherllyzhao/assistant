@@ -3,14 +3,16 @@
   "name": "sherlly-server",
   "main": "cloudflare/worker.js",
   "compatibility_date": "2026-06-03",
+  "workers_dev": true,
+  "preview_urls": true,
   "observability": {
     "enabled": true
   },
   "kv_namespaces": [
     {
       "binding": "SHERLLY_DATA",
-      "id": "replace-with-sherlly-data-kv-namespace-id",
-      "preview_id": "replace-with-sherlly-data-preview-kv-namespace-id"
+      "id": "e83c28a6cf1447e7bfded9d305abde59",
+      "preview_id": "9c1008fa9494495a87bb2394b64fbee3"
     }
   ],
   "vars": {

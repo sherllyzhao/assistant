@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld("sherlly", {
   notify: (payload) => ipcRenderer.invoke("sherlly:notify", payload),
   launchAction: (action) => ipcRenderer.invoke("sherlly:launch-action", action),
   selectAttachments: () => ipcRenderer.invoke("sherlly:select-attachments"),
+  getAttachmentPreview: (attachment) => ipcRenderer.invoke("sherlly:get-attachment-preview", attachment),
   openAttachment: (filePath) => ipcRenderer.invoke("sherlly:open-attachment", filePath),
   onQuickCapture: (callback) => {
     if (typeof callback !== "function") {

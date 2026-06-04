@@ -106,7 +106,14 @@ button {
 .reminder-alerts {
   display: grid;
   gap: 10px;
-  margin-bottom: 16px;
+  position: fixed;
+  top: 96px;
+  right: max(16px, calc((100vw - 1440px) / 2 + 16px));
+  z-index: 30;
+  width: min(420px, calc(100vw - 32px));
+  max-height: calc(100vh - 120px);
+  overflow-y: auto;
+  pointer-events: none;
 }
 
 .reminder-alert {
@@ -123,6 +130,20 @@ button {
   border-left: 5px solid var(--accent);
   border-radius: 8px;
   box-shadow: var(--shadow);
+  pointer-events: auto;
+  animation: reminder-slide-in 180ms ease-out;
+}
+
+@keyframes reminder-slide-in {
+  from {
+    opacity: 0;
+    transform: translateX(18px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
 }
 
 .reminder-alert > svg {
@@ -534,6 +555,14 @@ button {
   white-space: nowrap;
 }
 
+.task-attachment-thumb {
+  width: 20px;
+  height: 20px;
+  object-fit: cover;
+  border: 1px solid rgba(18, 113, 95, 0.22);
+  border-radius: 5px;
+}
+
 .daily-progress {
   display: inline-flex;
   align-items: center;
@@ -635,6 +664,34 @@ button {
 .side-rail {
   display: grid;
   gap: 16px;
+}
+
+.capture-action-bar {
+  position: sticky;
+  top: 10px;
+  z-index: 8;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin: -4px 0 14px;
+  padding: 8px;
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 12px 28px rgba(25, 45, 38, 0.1);
+  backdrop-filter: blur(10px);
+}
+
+.capture-action-bar .primary-button,
+.capture-action-bar .secondary-button {
+  min-width: 0;
+  padding: 0 10px;
+}
+
+.capture-action-bar span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .task-form,
@@ -759,7 +816,10 @@ button {
   line-height: 1;
 }
 
-.attachment-fieldset .secondary-button {
+.attachment-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
   margin-top: 9px;
 }
 
@@ -782,6 +842,21 @@ button {
 
 .attachment-item > svg {
   color: var(--accent);
+}
+
+.attachment-item-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.attachment-thumb {
+  width: 38px;
+  height: 38px;
+  object-fit: cover;
+  background: var(--surface-muted);
+  border: 1px solid var(--line);
+  border-radius: 8px;
 }
 
 .attachment-item strong {
@@ -973,6 +1048,93 @@ textarea:focus {
   text-align: center;
 }
 
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: rgba(13, 28, 25, 0.42);
+}
+
+.attachment-preview-dialog {
+  display: grid;
+  gap: 14px;
+  width: min(760px, 100%);
+  max-height: calc(100vh - 36px);
+  padding: 18px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 24px 70px rgba(13, 28, 25, 0.22);
+}
+
+.attachment-preview-heading,
+.attachment-preview-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.attachment-preview-heading h2 {
+  margin: 0;
+  font-size: 18px;
+  overflow-wrap: anywhere;
+}
+
+.attachment-preview-heading span {
+  display: inline-block;
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.attachment-preview-stage {
+  display: grid;
+  place-items: center;
+  min-height: 320px;
+  max-height: min(68vh, 620px);
+  overflow: auto;
+  background: var(--surface-muted);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.attachment-preview-image {
+  display: block;
+  max-width: 100%;
+  max-height: min(64vh, 580px);
+  object-fit: contain;
+}
+
+.attachment-preview-empty {
+  display: grid;
+  place-items: center;
+  gap: 8px;
+  padding: 28px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.attachment-preview-empty svg {
+  color: var(--accent);
+}
+
+.attachment-preview-empty strong {
+  color: var(--ink);
+}
+
+.attachment-preview-empty p {
+  margin: 0;
+  line-height: 1.55;
+}
+
+.attachment-preview-actions {
+  justify-content: flex-end;
+}
+
 @media (max-width: 1100px) {
   .workspace-grid {
     grid-template-columns: 1fr;
@@ -1025,6 +1187,13 @@ textarea:focus {
     grid-template-columns: auto 1fr;
   }
 
+  .reminder-alerts {
+    top: 84px;
+    right: 9px;
+    width: calc(100vw - 18px);
+    max-height: calc(100vh - 102px);
+  }
+
   .task-actions select,
   .task-actions button,
   .search-box {
@@ -1032,6 +1201,10 @@ textarea:focus {
   }
 
   .form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .attachment-actions {
     grid-template-columns: 1fr;
   }
 

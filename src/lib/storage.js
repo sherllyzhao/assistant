@@ -29,6 +29,21 @@ function getFallbackData() {
   return raw ? normalizeData(JSON.parse(raw)) : initialData;
 }
 
+async function loadLocalDataForMigration() {
+  const fallbackData = getFallbackData();
+
+  if (!window.sherlly?.loadData) {
+    return fallbackData;
+  }
+
+  try {
+    return mergeData(fallbackData, await window.sherlly.loadData());
+  } catch (error) {
+    console.error(error);
+    return fallbackData;
+  }
+}
+
 function hasMeaningfulData(data) {
   return data.tasks.length > 0 || data.candidates.length > 0 || data.logs.length > 0;
 }
@@ -121,10 +136,10 @@ export async function loadAppData() {
   if (cloudApiBaseUrl) {
     try {
       const cloudData = await loadCloudData();
-      const fallbackData = getFallbackData();
+      const localData = await loadLocalDataForMigration();
 
-      if (hasMeaningfulData(fallbackData)) {
-        const mergedData = mergeData(cloudData, fallbackData);
+      if (hasMeaningfulData(localData)) {
+        const mergedData = mergeData(cloudData, localData);
         await saveCloudData(mergedData);
         window.localStorage.removeItem(fallbackStorageKey);
         return mergedData;
@@ -217,7 +232,80 @@ export async function selectAttachments() {
   };
 }
 
+function isEmbeddedImageAttachment(filePath) {
+  return /^data:image\/[a-z0-9.+-]+;base64,/i.test(String(filePath || ""));
+}
+
+export async function getAttachmentPreview(attachment) {
+  const filePath = String(attachment?.path || "").trim();
+
+  if (isEmbeddedImageAttachment(filePath)) {
+    return {
+      ok: true,
+      imageUrl: filePath,
+      name: attachment?.name || "粘贴图片",
+      type: "image",
+    };
+  }
+
+  if (attachment?.type !== "image") {
+    return {
+      ok: false,
+      message: "非图片附件暂不支持预览，可以直接打开附件。",
+    };
+  }
+
+  if (window.sherlly?.getAttachmentPreview) {
+    return window.sherlly.getAttachmentPreview(attachment);
+  }
+
+  return {
+    ok: false,
+    message: "当前环境不支持本机图片预览，请在 Electron 桌面端使用。",
+  };
+}
+
+function dataUrlToBlob(dataUrl) {
+  const [metadata, content] = dataUrl.split(",");
+  const mimeType = metadata.match(/^data:([^;]+)/i)?.[1] || "image/png";
+  const binary = window.atob(content || "");
+  const bytes = new Uint8Array(binary.length);
+
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+
+  return new Blob([bytes], { type: mimeType });
+}
+
+function openEmbeddedImageAttachment(dataUrl) {
+  try {
+    const objectUrl = URL.createObjectURL(dataUrlToBlob(dataUrl));
+    const previewWindow = window.open(objectUrl, "_blank");
+
+    if (!previewWindow) {
+      URL.revokeObjectURL(objectUrl);
+      return {
+        ok: false,
+        message: "图片预览窗口被浏览器拦截。",
+      };
+    }
+
+    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60 * 1000);
+    return { ok: true };
+  } catch (error) {
+    return {
+      ok: false,
+      message: error.message || "无法打开粘贴图片。",
+    };
+  }
+}
+
 export async function openAttachment(filePath) {
+  if (isEmbeddedImageAttachment(filePath)) {
+    return openEmbeddedImageAttachment(filePath);
+  }
+
   if (window.sherlly?.openAttachment) {
     return window.sherlly.openAttachment(filePath);
   }

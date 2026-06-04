@@ -367,6 +367,57 @@ async function selectAttachments() {
   return { ok: true, filePaths: result.filePaths };
 }
 
+function getAttachmentPreview(attachment = {}) {
+  const target = String(attachment.path || "").trim();
+  const mimeTypes = {
+    ".apng": "image/apng",
+    ".avif": "image/avif",
+    ".bmp": "image/bmp",
+    ".gif": "image/gif",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".svg": "image/svg+xml",
+    ".webp": "image/webp",
+  };
+  const extension = path.extname(target).toLowerCase();
+  const mimeType = mimeTypes[extension];
+
+  if (!target) {
+    return { ok: false, message: "附件路径不能为空" };
+  }
+
+  if (!mimeType) {
+    return { ok: false, message: "非图片附件暂不支持预览，可以直接打开附件。" };
+  }
+
+  try {
+    if (!fs.existsSync(target)) {
+      return { ok: false, message: "附件文件不存在或已移动。" };
+    }
+
+    const stats = fs.statSync(target);
+    const maxPreviewSize = 8 * 1024 * 1024;
+
+    if (stats.size > maxPreviewSize) {
+      return { ok: false, message: "图片超过 8MB，建议直接打开原文件查看。" };
+    }
+
+    const imageUrl = `data:${mimeType};base64,${fs.readFileSync(target).toString("base64")}`;
+    return {
+      ok: true,
+      imageUrl,
+      name: attachment.name || path.basename(target),
+      type: "image",
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      message: error.message || "无法读取图片预览。",
+    };
+  }
+}
+
 async function openAttachment(filePath) {
   const target = String(filePath || "").trim();
 
@@ -396,6 +447,7 @@ app.whenReady().then(() => {
     }
   });
   ipcMain.handle("sherlly:select-attachments", () => selectAttachments());
+  ipcMain.handle("sherlly:get-attachment-preview", (_event, attachment) => getAttachmentPreview(attachment));
   ipcMain.handle("sherlly:open-attachment", (_event, filePath) => openAttachment(filePath));
 
   createWindow();

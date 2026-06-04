@@ -5,8 +5,10 @@ import {
   CheckCircle2,
   ClipboardList,
   Clock3,
+  Eye,
   FileText,
   Filter,
+  Image as ImageIcon,
   Inbox,
   ListChecks,
   Megaphone,
@@ -24,6 +26,7 @@ import {
   candidateToDraft,
   createLog,
   createTask,
+  createId,
   dailySlots,
   detectCandidatesFromText,
   createDailyReport,
@@ -58,6 +61,7 @@ import {
   saveAppData,
   sendNotification,
   selectAttachments,
+  getAttachmentPreview,
   openAttachment,
 } from "./lib/storage.js";
 
@@ -76,6 +80,16 @@ const viewOptions = [
 ];
 
 const cloudSyncEnabled = Boolean(import.meta.env.VITE_SHERLLY_API_URL);
+const imageMimeExtensions = {
+  "image/apng": "apng",
+  "image/avif": "avif",
+  "image/bmp": "bmp",
+  "image/gif": "gif",
+  "image/jpeg": "jpg",
+  "image/png": "png",
+  "image/svg+xml": "svg",
+  "image/webp": "webp",
+};
 
 function App() {
   const [data, setData] = useState(initialData);
@@ -87,6 +101,7 @@ function App() {
   const [searchQuery, setSearchQuery] = useState("");
   const [logRange, setLogRange] = useState("today");
   const [reminderAlerts, setReminderAlerts] = useState([]);
+  const [attachmentPreview, setAttachmentPreview] = useState(null);
   const [isLoaded, setIsLoaded] = useState(false);
   const [isDraggingText, setIsDraggingText] = useState(false);
   const saveTimerRef = useRef(0);
@@ -225,6 +240,21 @@ function App() {
     const intervalId = window.setInterval(checkReminders, 60 * 1000);
     return () => window.clearInterval(intervalId);
   }, [data, isLoaded]);
+
+  useEffect(() => {
+    if (!attachmentPreview) {
+      return;
+    }
+
+    const handleKeyDown = (event) => {
+      if (event.key === "Escape") {
+        setAttachmentPreview(null);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [attachmentPreview]);
 
   const taskStats = useMemo(() => {
     const activeTasks = data.tasks.filter((task) => !["done", "cancelled"].includes(task.status));
@@ -406,6 +436,29 @@ function App() {
     setDraft((current) => ({ ...current, [field]: value }));
   }
 
+  function appendDraftAttachments(nextAttachments) {
+    const normalizedNextAttachments = normalizeAttachments(nextAttachments);
+
+    if (normalizedNextAttachments.length === 0) {
+      return;
+    }
+
+    setDraft((current) => {
+      const currentAttachments = normalizeAttachments(current.attachments);
+      const existingPaths = new Set(currentAttachments.map((attachment) => attachment.path));
+      const uniqueAttachments = normalizedNextAttachments.filter((attachment) => !existingPaths.has(attachment.path));
+
+      if (uniqueAttachments.length === 0) {
+        return current;
+      }
+
+      return {
+        ...current,
+        attachments: [...currentAttachments, ...uniqueAttachments],
+      };
+    });
+  }
+
   async function addDraftAttachments() {
     const result = await selectAttachments();
 
@@ -425,16 +478,144 @@ function App() {
       return;
     }
 
-    setDraft((current) => {
-      const currentAttachments = normalizeAttachments(current.attachments);
-      const existingPaths = new Set(currentAttachments.map((attachment) => attachment.path));
-      const uniqueAttachments = nextAttachments.filter((attachment) => !existingPaths.has(attachment.path));
+    appendDraftAttachments(nextAttachments);
+  }
 
-      return {
-        ...current,
-        attachments: [...currentAttachments, ...uniqueAttachments],
-      };
+  function getClipboardImageFiles(clipboardData) {
+    const directFiles = Array.from(clipboardData?.files || []).filter((file) => file.type.startsWith("image/"));
+
+    if (directFiles.length > 0) {
+      return directFiles;
+    }
+
+    return Array.from(clipboardData?.items || [])
+      .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
+      .map((item) => item.getAsFile())
+      .filter(Boolean);
+  }
+
+  function readFileAsDataUrl(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.addEventListener("load", () => resolve(String(reader.result || "")));
+      reader.addEventListener("error", () => reject(new Error("图片读取失败")));
+      reader.readAsDataURL(file);
     });
+  }
+
+  function createPastedImageAttachment(dataUrl, file, index, now = new Date()) {
+    const extension = imageMimeExtensions[file.type] || "png";
+    const fallbackName = `粘贴图片-${now.toISOString().replace(/[:.]/g, "-").slice(0, 19)}-${index + 1}.${extension}`;
+    const name = String(file.name || "").trim() || fallbackName;
+
+    return {
+      id: createId("attachment"),
+      name,
+      path: dataUrl,
+      type: "image",
+      addedAt: now.toISOString(),
+    };
+  }
+
+  async function addImageFilesAsAttachments(files) {
+    const imageFiles = Array.from(files || []).filter((file) => file?.type?.startsWith("image/"));
+
+    if (imageFiles.length === 0) {
+      return;
+    }
+
+    try {
+      const now = new Date();
+      const imageAttachments = await Promise.all(
+        imageFiles.map(async (file, index) => {
+          const dataUrl = await readFileAsDataUrl(file);
+
+          if (!dataUrl.startsWith("data:image/")) {
+            throw new Error("剪贴板内容不是有效图片");
+          }
+
+          return createPastedImageAttachment(dataUrl, file, index, now);
+        }),
+      );
+
+      appendDraftAttachments(imageAttachments);
+      notifyWithFallback({
+        title: "已添加粘贴图片",
+        body: `已把 ${imageAttachments.length} 张图片加入当前任务附件。`,
+        sound: false,
+        flash: false,
+      });
+    } catch (error) {
+      notifyWithFallback({
+        title: "无法粘贴图片",
+        body: error.message || "请确认剪贴板里是图片内容。",
+        sound: false,
+        flash: false,
+      });
+    }
+  }
+
+  async function pasteClipboardImages() {
+    if (!navigator.clipboard?.read) {
+      notifyWithFallback({
+        title: "无法读取剪贴板",
+        body: "当前环境不支持按钮读取图片，请在任务录入区直接粘贴图片。",
+        sound: false,
+        flash: false,
+      });
+      return;
+    }
+
+    try {
+      const clipboardItems = await navigator.clipboard.read();
+      const imageFiles = [];
+
+      for (const item of clipboardItems) {
+        const imageType = item.types.find((type) => type.startsWith("image/"));
+
+        if (!imageType) {
+          continue;
+        }
+
+        const blob = await item.getType(imageType);
+        const extension = imageMimeExtensions[imageType] || "png";
+        imageFiles.push(
+          new File([blob], `粘贴图片-${Date.now()}-${imageFiles.length + 1}.${extension}`, {
+            type: imageType,
+          }),
+        );
+      }
+
+      if (imageFiles.length === 0) {
+        notifyWithFallback({
+          title: "剪贴板没有图片",
+          body: "请先复制截图或图片，再粘贴到任务附件。",
+          sound: false,
+          flash: false,
+        });
+        return;
+      }
+
+      await addImageFilesAsAttachments(imageFiles);
+    } catch (error) {
+      notifyWithFallback({
+        title: "无法读取剪贴板",
+        body: error.message || "请在任务录入区直接粘贴图片。",
+        sound: false,
+        flash: false,
+      });
+    }
+  }
+
+  function handleTaskFormPaste(event) {
+    const imageFiles = getClipboardImageFiles(event.clipboardData);
+
+    if (imageFiles.length === 0) {
+      return;
+    }
+
+    event.preventDefault();
+    addImageFilesAsAttachments(imageFiles);
   }
 
   function removeDraftAttachment(attachmentId) {
@@ -442,6 +623,50 @@ function App() {
       ...current,
       attachments: normalizeAttachments(current.attachments).filter((attachment) => attachment.id !== attachmentId),
     }));
+  }
+
+  async function previewAttachment(attachment) {
+    const normalizedAttachment = normalizeAttachments([attachment])[0];
+
+    if (!normalizedAttachment) {
+      return;
+    }
+
+    setAttachmentPreview({
+      attachment: normalizedAttachment,
+      imageUrl: "",
+      message: "",
+      status: "loading",
+    });
+
+    try {
+      const result = await getAttachmentPreview(normalizedAttachment);
+      setAttachmentPreview((current) => {
+        if (current?.attachment.id !== normalizedAttachment.id) {
+          return current;
+        }
+
+        return {
+          attachment: normalizedAttachment,
+          imageUrl: result?.imageUrl || "",
+          message: result?.message || "",
+          status: result?.ok ? "ready" : "unavailable",
+        };
+      });
+    } catch (error) {
+      setAttachmentPreview((current) => {
+        if (current?.attachment.id !== normalizedAttachment.id) {
+          return current;
+        }
+
+        return {
+          attachment: normalizedAttachment,
+          imageUrl: "",
+          message: error.message || "附件预览失败。",
+          status: "unavailable",
+        };
+      });
+    }
   }
 
   async function openTaskAttachment(attachment) {
@@ -768,7 +993,7 @@ function App() {
       </header>
 
       {reminderAlerts.length > 0 ? (
-        <section className="reminder-alerts" aria-label="提醒消息">
+        <section className="reminder-alerts" aria-label="提醒消息" aria-live="polite" role="status">
           {reminderAlerts.map((alert) => (
             <article className="reminder-alert" key={alert.id}>
               <Bell size={18} />
@@ -852,7 +1077,7 @@ function App() {
                       onStatusChange={changeTaskStatus}
                       onStart={startTask}
                       onCompleteOnce={completeTaskOnce}
-                      onOpenAttachment={openTaskAttachment}
+                      onPreviewAttachment={previewAttachment}
                       onDelete={deleteTask}
                     />
                   ))
@@ -883,6 +1108,21 @@ function App() {
               ) : null}
             </div>
 
+            <div className="capture-action-bar" aria-label="任务快捷操作">
+              <button className="secondary-button" type="button" onClick={addDraftAttachments} title="添加图片或文件">
+                <Paperclip size={17} />
+                <span>附件</span>
+              </button>
+              <button className="secondary-button" type="button" onClick={pasteClipboardImages} title="粘贴图片">
+                <ClipboardList size={17} />
+                <span>粘贴图片</span>
+              </button>
+              <button className="primary-button" type="submit" form="task-form">
+                <Save size={17} />
+                <span>{editingId ? "保存" : "创建"}</span>
+              </button>
+            </div>
+
             <div
               className={`drop-capture ${isDraggingText ? "is-active" : ""}`}
               onDragLeave={handleTextDragLeave}
@@ -896,7 +1136,7 @@ function App() {
               </div>
             </div>
 
-            <form className="task-form" onSubmit={submitTask}>
+            <form className="task-form" id="task-form" onPaste={handleTaskFormPaste} onSubmit={submitTask}>
               <label>
                 标题
                 <input
@@ -1035,39 +1275,54 @@ function App() {
 
               <fieldset className="attachment-fieldset">
                 <legend>附件</legend>
-                <button className="secondary-button full-width" type="button" onClick={addDraftAttachments}>
-                  <Paperclip size={18} />
-                  添加图片或文件
-                </button>
+                <div className="attachment-actions">
+                  <button className="secondary-button full-width" type="button" onClick={addDraftAttachments}>
+                    <Paperclip size={18} />
+                    添加图片或文件
+                  </button>
+                  <button className="secondary-button full-width" type="button" onClick={pasteClipboardImages}>
+                    <ClipboardList size={18} />
+                    粘贴图片
+                  </button>
+                </div>
                 {draftAttachments.length === 0 ? (
-                  <p>暂无附件；桌面端会保存本机文件路径，可在任务卡片里直接打开。</p>
+                  <p>暂无附件；桌面端会保存本机文件路径，粘贴图片会随任务一起保存。</p>
                 ) : (
                   <div className="attachment-list">
                     {draftAttachments.map((attachment) => (
                       <article className="attachment-item" key={attachment.id}>
-                        <Paperclip size={16} />
+                        {attachment.type === "image" && attachment.path.startsWith("data:image/") ? (
+                          <img className="attachment-thumb" src={attachment.path} alt="" />
+                        ) : (
+                          <Paperclip size={16} />
+                        )}
                         <div>
                           <strong>{attachment.name}</strong>
                           <span>{attachment.type === "image" ? "图片" : "文件"}</span>
                         </div>
-                        <button
-                          className="icon-button danger"
-                          type="button"
-                          onClick={() => removeDraftAttachment(attachment.id)}
-                          title="移除附件"
-                        >
-                          <X size={16} />
-                        </button>
+                        <div className="attachment-item-actions">
+                          <button
+                            className="icon-button"
+                            type="button"
+                            onClick={() => previewAttachment(attachment)}
+                            title="预览附件"
+                          >
+                            <Eye size={16} />
+                          </button>
+                          <button
+                            className="icon-button danger"
+                            type="button"
+                            onClick={() => removeDraftAttachment(attachment.id)}
+                            title="移除附件"
+                          >
+                            <X size={16} />
+                          </button>
+                        </div>
                       </article>
                     ))}
                   </div>
                 )}
               </fieldset>
-
-              <button className="primary-button full-width" type="submit">
-                <Save size={18} />
-                {editingId ? "保存修改" : "创建任务"}
-              </button>
             </form>
           </section>
 
@@ -1116,6 +1371,14 @@ function App() {
 
         </aside>
       </div>
+
+      {attachmentPreview ? (
+        <AttachmentPreviewDialog
+          preview={attachmentPreview}
+          onClose={() => setAttachmentPreview(null)}
+          onOpen={openTaskAttachment}
+        />
+      ) : null}
     </main>
   );
 }
@@ -1234,7 +1497,67 @@ function ReportPanel({ dailyReport, visibleLogs, logRange, onLogRangeChange }) {
   );
 }
 
-function TaskRow({ task, onEdit, onStatusChange, onStart, onCompleteOnce, onOpenAttachment, onDelete }) {
+function AttachmentPreviewDialog({ preview, onClose, onOpen }) {
+  const { attachment, imageUrl, message, status } = preview;
+  const hasImagePreview = status === "ready" && imageUrl;
+
+  return (
+    <div className="modal-backdrop" role="presentation" onClick={onClose}>
+      <section
+        className="attachment-preview-dialog"
+        role="dialog"
+        aria-label={`附件预览：${attachment.name}`}
+        aria-modal="true"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="attachment-preview-heading">
+          <div>
+            <p className="eyebrow">Preview</p>
+            <h2>{attachment.name}</h2>
+            <span>{attachment.type === "image" ? "图片附件" : "文件附件"}</span>
+          </div>
+          <button className="icon-button" type="button" onClick={onClose} title="关闭预览">
+            <X size={18} />
+          </button>
+        </div>
+
+        <div className="attachment-preview-stage">
+          {status === "loading" ? (
+            <EmptyState icon={<ImageIcon size={26} />} text="正在加载预览" />
+          ) : hasImagePreview ? (
+            <img className="attachment-preview-image" src={imageUrl} alt={attachment.name} />
+          ) : (
+            <div className="attachment-preview-empty">
+              <ImageIcon size={28} />
+              <strong>暂无可用预览</strong>
+              <p>{message || "这个附件暂时无法在应用内预览。"}</p>
+            </div>
+          )}
+        </div>
+
+        <div className="attachment-preview-actions">
+          <button className="secondary-button" type="button" onClick={() => onOpen(attachment)}>
+            <Paperclip size={18} />
+            打开附件
+          </button>
+          <button className="primary-button" type="button" onClick={onClose}>
+            关闭
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function TaskRow({
+  task,
+  onEdit,
+  onStatusChange,
+  onStart,
+  onCompleteOnce,
+  onPreviewAttachment,
+  onDelete,
+}) {
   const priority = getPriorityMeta(task.priority);
   const status = getStatusMeta(task.status);
   const overdue = isOverdue(task);
@@ -1316,8 +1639,17 @@ function TaskRow({ task, onEdit, onStatusChange, onStart, onCompleteOnce, onOpen
         {taskAttachments.length > 0 ? (
           <div className="task-attachments" onClick={stopRowClick}>
             {taskAttachments.map((attachment) => (
-              <button type="button" key={attachment.id} onClick={() => onOpenAttachment(attachment)}>
-                <Paperclip size={14} />
+              <button
+                type="button"
+                key={attachment.id}
+                onClick={() => onPreviewAttachment(attachment)}
+                title="预览附件"
+              >
+                {attachment.type === "image" && attachment.path.startsWith("data:image/") ? (
+                  <img className="task-attachment-thumb" src={attachment.path} alt="" />
+                ) : (
+                  <Eye size={14} />
+                )}
                 <span>{attachment.name}</span>
               </button>
             ))}
