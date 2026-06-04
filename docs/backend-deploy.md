@@ -137,20 +137,24 @@ npm run pack:win
 
 ## GitHub Releases 自动发布安装包
 
-仓库已提供 `.github/workflows/release-desktop.yml`。第一次使用前，在 GitHub 仓库配置：
+仓库已提供 `.github/workflows/release-desktop.yml`。它会监听 `main` / `master` 分支上的 `package.json` 改动；只有 `version` 字段发生变化时，才会按这个版本自动发布安装包。
+
+第一次使用前，在 GitHub 仓库配置：
 
 - Repository variable `SHERLLY_RENDERER_URL`：线上前端页面地址。
 - Repository variable `VITE_SHERLLY_API_URL`：线上后台 API 地址，用作安装包内置页面的回退配置。
 - Repository secret `VITE_SHERLLY_API_TOKEN`：和后台 `SHERLLY_API_TOKEN` 一致。
 
-发布步骤：
+发布步骤示例：
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+npm version patch --no-git-tag-version
+git add package.json package-lock.json
+git commit -m "chore: release 0.1.1"
+git push
 ```
 
-GitHub Actions 会安装依赖、写入桌面端远程页面配置、运行目标检查、构建前端，并把 Windows 安装包上传到 GitHub Release。
+GitHub Actions 会读取 `package.json` 里的版本号，自动创建或复用 `v版本号` tag，安装依赖、写入桌面端远程页面配置、运行目标检查、构建前端和 Windows 安装包，然后上传到对应 GitHub Release。如果只是改了 `package.json` 但版本号没变，发布会被跳过。
 
 ## API 检查
 

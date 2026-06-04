@@ -2,8 +2,11 @@ name: Release desktop installer
 
 on:
   push:
-    tags:
-      - "v*"
+    branches:
+      - main
+      - master
+    paths:
+      - package.json
   workflow_dispatch:
 
 permissions:
@@ -22,6 +25,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -29,17 +34,129 @@ jobs:
           node-version: 20
           cache: npm
 
+      - name: Read package version
+        id: package_version
+        shell: bash
+        run: |
+          version="$(node -p "require('./package.json').version")"
+
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::package.json version must be semver, got '$version'."
+            exit 1
+          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+
+      - name: Check whether version changed
+        id: version_change
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "reason=manual dispatch" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          before="${{ github.event.before }}"
+          current="${{ steps.package_version.outputs.version }}"
+
+          if [[ -z "$before" || "$before" =~ ^0+$ ]]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "reason=initial push" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          previous="$(git show "$before:package.json" 2>/dev/null | node -e "let input = ''; process.stdin.on('data', chunk => input += chunk); process.stdin.on('end', () => { try { console.log(JSON.parse(input).version || '') } catch { console.log('') } });")"
+
+          echo "Previous package version: ${previous:-<missing>}"
+          echo "Current package version: $current"
+
+          if [ "$previous" = "$current" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "reason=package version unchanged" >> "$GITHUB_OUTPUT"
+            echo "package.json changed, but version stayed at $current. Release skipped." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+          echo "reason=package version changed from ${previous:-<missing>} to $current" >> "$GITHUB_OUTPUT"
+
+      - name: Check release tag
+        if: steps.version_change.outputs.changed == 'true'
+        id: release_tag
+        shell: bash
+        run: |
+          tag="${{ steps.package_version.outputs.tag }}"
+          git fetch --tags
+
+          tag_commit="$(git rev-list -n 1 "$tag" 2>/dev/null || true)"
+
+          if [ -n "$tag_commit" ] && [ "$tag_commit" != "$GITHUB_SHA" ]; then
+            echo "::error::Release tag $tag already exists at $tag_commit. Bump package.json version before publishing this commit."
+            exit 1
+          fi
+
+          echo "exists=$([ -n "$tag_commit" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
       - name: Install dependencies
+        if: steps.version_change.outputs.changed == 'true'
         run: npm ci
 
       - name: Write desktop renderer config
+        if: steps.version_change.outputs.changed == 'true'
         run: npm run renderer:config
 
       - name: Check target files
+        if: steps.version_change.outputs.changed == 'true'
         run: npm run check
 
       - name: Build renderer
+        if: steps.version_change.outputs.changed == 'true'
         run: npm run build
 
-      - name: Publish installer
-        run: npx electron-builder --win nsis --x64 --publish always
+      - name: Build installer
+        if: steps.version_change.outputs.changed == 'true'
+        run: npx electron-builder --win nsis --x64 --publish never
+
+      - name: Collect release assets
+        if: steps.version_change.outputs.changed == 'true'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path release-assets | Out-Null
+
+          Get-ChildItem -Path release -Recurse -File |
+            Where-Object { @(".exe", ".yml", ".blockmap") -contains $_.Extension.ToLowerInvariant() } |
+            Copy-Item -Destination release-assets -Force
+
+          $assets = Get-ChildItem -Path release-assets -File
+
+          if (-not $assets) {
+            throw "No release assets found."
+          }
+
+          $assets | ForEach-Object { $_.FullName }
+
+      - name: Create release tag
+        if: steps.version_change.outputs.changed == 'true' && steps.release_tag.outputs.exists != 'true'
+        shell: bash
+        run: |
+          git tag "${{ steps.package_version.outputs.tag }}" "$GITHUB_SHA"
+          git push origin "${{ steps.package_version.outputs.tag }}"
+
+      - name: Publish GitHub release
+        if: steps.version_change.outputs.changed == 'true'
+        shell: bash
+        run: |
+          tag="${{ steps.package_version.outputs.tag }}"
+          version="${{ steps.package_version.outputs.version }}"
+          notes="Built automatically from package.json version $version."
+
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" release-assets/* --clobber
+          else
+            gh release create "$tag" release-assets/* \
+              --title "Sherlly Assistant $version" \
+              --notes "$notes" \
+              --verify-tag
+          fi
