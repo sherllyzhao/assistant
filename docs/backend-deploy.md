@@ -108,6 +108,50 @@ VITE_SHERLLY_API_TOKEN=<和后台一致的 token>
 
 开发时也可以先在本机 `.env` 里这样配置，然后启动桌面端验证。
 
+## exe 加载线上页面
+
+如果希望“页面改了不用重新发 exe”，就把桌面端做成稳定外壳：
+
+1. 把前端 `dist` 部署到 Cloudflare Pages / Vercel / Netlify / GitHub Pages 等静态托管平台。
+2. 在这个前端部署环境里配置：
+
+```env
+VITE_SHERLLY_API_URL=https://你的后台服务域名
+VITE_SHERLLY_API_TOKEN=<和后台一致的 token>
+```
+
+3. 打包 exe 前配置：
+
+```env
+SHERLLY_RENDERER_URL=https://你的前端页面域名
+```
+
+4. 执行：
+
+```bash
+npm run renderer:config
+npm run pack:win
+```
+
+生成的 exe 会优先加载 `SHERLLY_RENDERER_URL`。之后只要前端页面仍部署在同一个 URL，修改页面后只需要重新部署 Web 前端，不需要重新发布 exe。远程页面不可访问时，exe 会回退到安装包内置的 `dist/index.html`。
+
+## GitHub Releases 自动发布安装包
+
+仓库已提供 `.github/workflows/release-desktop.yml`。第一次使用前，在 GitHub 仓库配置：
+
+- Repository variable `SHERLLY_RENDERER_URL`：线上前端页面地址。
+- Repository variable `VITE_SHERLLY_API_URL`：线上后台 API 地址，用作安装包内置页面的回退配置。
+- Repository secret `VITE_SHERLLY_API_TOKEN`：和后台 `SHERLLY_API_TOKEN` 一致。
+
+发布步骤：
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+GitHub Actions 会安装依赖、写入桌面端远程页面配置、运行目标检查、构建前端，并把 Windows 安装包上传到 GitHub Release。
+
 ## API 检查
 
 ```bash

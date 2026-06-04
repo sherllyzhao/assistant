@@ -17,8 +17,10 @@ const path = require("node:path");
 const APP_NAME = "Sherlly Assistant";
 const APP_USER_MODEL_ID = "com.sherlly.assistant";
 const DATA_FILE_NAME = "sherlly-data.json";
+const RENDERER_CONFIG_FILE_NAME = "renderer-config.json";
 const QUICK_CAPTURE_SHORTCUT = "CommandOrControl+Alt+S";
-const DEV_RENDERER_URL = process.env.ELECTRON_RENDERER_URL || "http://127.0.0.1:5188";
+const LOCAL_DEV_RENDERER_URL = "http://127.0.0.1:5188";
+const DEV_RENDERER_URL = normalizeRendererUrl(process.env.ELECTRON_RENDERER_URL) || LOCAL_DEV_RENDERER_URL;
 
 let mainWindow = null;
 let tray = null;
@@ -74,6 +76,51 @@ function writeDataFile(data) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, JSON.stringify(normalized, null, 2), "utf8");
   return normalized;
+}
+
+function normalizeRendererUrl(value) {
+  const url = String(value || "").trim();
+
+  if (!url) {
+    return "";
+  }
+
+  try {
+    const parsedUrl = new URL(url);
+
+    if (!["http:", "https:"].includes(parsedUrl.protocol)) {
+      return "";
+    }
+
+    return parsedUrl.toString().replace(/\/$/, "");
+  } catch {
+    return "";
+  }
+}
+
+function readRendererConfig() {
+  const configPath = path.join(__dirname, RENDERER_CONFIG_FILE_NAME);
+
+  if (!fs.existsSync(configPath)) {
+    return {};
+  }
+
+  try {
+    return JSON.parse(fs.readFileSync(configPath, "utf8"));
+  } catch (error) {
+    console.error("Failed to read Sherlly renderer config:", error);
+    return {};
+  }
+}
+
+function getPackagedRendererUrl() {
+  const config = readRendererConfig();
+
+  return (
+    normalizeRendererUrl(process.env.SHERLLY_RENDERER_URL) ||
+    normalizeRendererUrl(process.env.ELECTRON_RENDERER_URL) ||
+    normalizeRendererUrl(config.productionRendererUrl)
+  );
 }
 
 function createTrayIcon(fill, accentFill) {
@@ -177,17 +224,21 @@ function startTrayFlash() {
   }, 350);
 }
 
-async function canUseDevRenderer() {
-  if (process.env.ELECTRON_RENDERER_URL) {
+async function canUseRendererUrl(rendererUrl) {
+  if (!rendererUrl) {
+    return false;
+  }
+
+  if (process.env.ELECTRON_RENDERER_URL || process.env.SHERLLY_RENDERER_URL) {
     return true;
   }
 
-  if (app.isPackaged) {
+  if (app.isPackaged && rendererUrl === LOCAL_DEV_RENDERER_URL) {
     return false;
   }
 
   try {
-    const response = await fetch(DEV_RENDERER_URL, {
+    const response = await fetch(rendererUrl, {
       signal: AbortSignal.timeout(800),
     });
     return response.ok;
@@ -212,14 +263,15 @@ function createWindow() {
   });
 
   const distIndex = path.join(__dirname, "..", "dist", "index.html");
+  const preferredRendererUrl = app.isPackaged ? getPackagedRendererUrl() : DEV_RENDERER_URL;
 
-  canUseDevRenderer().then((useDevRenderer) => {
+  canUseRendererUrl(preferredRendererUrl).then((useRendererUrl) => {
     if (!mainWindow) {
       return;
     }
 
-    if (useDevRenderer) {
-      mainWindow.loadURL(DEV_RENDERER_URL);
+    if (useRendererUrl) {
+      mainWindow.loadURL(preferredRendererUrl);
       return;
     }
 
@@ -238,7 +290,7 @@ function createWindow() {
 
 function createTray() {
   tray = new Tray(getTrayImages().base);
-  tray.setToolTip(APP_PROTOCOL_NAME);
+  tray.setToolTip(APP_NAME);
   tray.setContextMenu(
     Menu.buildFromTemplate([
       {

@@ -17,7 +17,10 @@
     "cf:secret:token": "wrangler secret put SHERLLY_API_TOKEN",
     "build": "vite build",
     "preview": "vite preview",
-    "check": "node --check electron/main.cjs && node --check electron/preload.cjs && node --check scripts/check-project.cjs && node --check scripts/start-desktop.cjs && node --check server/index.cjs && node scripts/check-project.cjs"
+    "renderer:config": "node scripts/write-renderer-config.cjs",
+    "pack:win": "npm run renderer:config && npm run check && npm run build && electron-builder --win nsis --x64 --publish never",
+    "release:win": "npm run renderer:config && npm run check && npm run build && electron-builder --win nsis --x64 --publish always",
+    "check": "node --check electron/main.cjs && node --check electron/preload.cjs && node --check scripts/check-project.cjs && node --check scripts/start-desktop.cjs && node --check scripts/write-renderer-config.cjs && node --check server/index.cjs && node scripts/check-project.cjs"
   },
   "dependencies": {
     "cors": "^2.8.6",
@@ -31,7 +34,45 @@
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.4",
     "electron": "^33.2.1",
+    "electron-builder": "^26.8.1",
     "vite": "^5.4.11",
     "wrangler": "^4.97.0"
+  },
+  "build": {
+    "appId": "com.sherlly.assistant",
+    "productName": "Sherlly Assistant",
+    "asar": true,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "${productName}-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "releaseType": "release"
+      }
+    ]
   }
 }
