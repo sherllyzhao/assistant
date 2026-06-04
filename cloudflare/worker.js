@@ -182,7 +182,7 @@ function getCorsHeaders(request, env) {
     allowed: allowRequestOrigin,
     headers: {
       "Access-Control-Allow-Origin": allowAnyOrigin ? "*" : origin || allowedOrigins[0] || "*",
-      "Access-Control-Allow-Methods": "GET, PUT, OPTIONS",
+      "Access-Control-Allow-Methods": "GET, POST, PUT, OPTIONS",
       "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Sherlly-Token",
       "Access-Control-Max-Age": "86400",
       Vary: "Origin",

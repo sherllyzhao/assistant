@@ -84,6 +84,19 @@ const filterOptions = [
   { value: "done", label: "已完成" },
 ];
 
+const sourceOptions = [
+  { value: "手动录入", label: "手动录入" },
+  { value: "快捷键速记", label: "快捷键速记" },
+  { value: "微信粘贴", label: "微信粘贴" },
+  { value: "拖拽文本", label: "拖拽文本" },
+];
+
+const ownerOptions = [
+  { value: "自己", label: "自己" },
+  { value: "同事", label: "同事" },
+  { value: "客户", label: "客户" },
+];
+
 const viewOptions = [
   { value: "tasks", label: "任务看板", description: "录入、筛选和推进待办" },
   { value: "report", label: "工作日报", description: "查看日报概览与日志明细" },
@@ -101,6 +114,16 @@ const imageMimeExtensions = {
   "image/svg+xml": "svg",
   "image/webp": "webp",
 };
+
+function withCurrentOption(options, value) {
+  const cleanValue = String(value || "").trim();
+
+  if (!cleanValue || options.some((option) => option.value === cleanValue)) {
+    return options;
+  }
+
+  return [...options, { value: cleanValue, label: `${cleanValue}（旧值）` }];
+}
 
 function App() {
   const [data, setData] = useState(initialData);
@@ -122,6 +145,7 @@ function App() {
   const [logRange, setLogRange] = useState("today");
   const [reminderAlerts, setReminderAlerts] = useState([]);
   const [attachmentPreview, setAttachmentPreview] = useState(null);
+  const [detailTaskId, setDetailTaskId] = useState("");
   const [isLoaded, setIsLoaded] = useState(false);
   const [isDraggingText, setIsDraggingText] = useState(false);
   const saveTimerRef = useRef(0);
@@ -333,6 +357,21 @@ function App() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [attachmentPreview]);
 
+  useEffect(() => {
+    if (!detailTaskId || attachmentPreview) {
+      return;
+    }
+
+    const handleKeyDown = (event) => {
+      if (event.key === "Escape") {
+        setDetailTaskId("");
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [attachmentPreview, detailTaskId]);
+
   const taskStats = useMemo(() => {
     const activeTasks = data.tasks.filter((task) => !["done", "cancelled"].includes(task.status));
     const now = new Date();
@@ -389,6 +428,10 @@ function App() {
   const dailyReport = useMemo(
     () => createDailyReport(data.tasks, data.logs, logRange),
     [data.tasks, data.logs, logRange],
+  );
+  const detailTask = useMemo(
+    () => data.tasks.find((task) => task.id === detailTaskId) || null,
+    [data.tasks, detailTaskId],
   );
   const selectedDraftSlots = useMemo(
     () => normalizeDailySlots(draft.dailySlotValues, draft.dailyTarget),
@@ -1285,6 +1328,8 @@ function App() {
               dailyReport={dailyReport}
               logRange={logRange}
               onLogRangeChange={setLogRange}
+              onPreviewAttachment={previewAttachment}
+              onViewTask={(task) => setDetailTaskId(task.id)}
               visibleLogs={visibleLogs}
             />
           )}
@@ -1348,15 +1393,24 @@ function App() {
               <div className="form-grid">
                 <label>
                   来源
-                  <input value={draft.source} onChange={(event) => updateDraft("source", event.target.value)} />
+                  <select value={draft.source} onChange={(event) => updateDraft("source", event.target.value)}>
+                    {withCurrentOption(sourceOptions, draft.source).map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
                 </label>
                 <label>
                   负责人
-                  <input
-                    value={draft.owner}
-                    onChange={(event) => updateDraft("owner", event.target.value)}
-                    placeholder="自己 / 同事 / 客户"
-                  />
+                  <select value={draft.owner} onChange={(event) => updateDraft("owner", event.target.value)}>
+                    <option value="">请选择负责人</option>
+                    {withCurrentOption(ownerOptions, draft.owner).map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
                 </label>
               </div>
 
@@ -1570,6 +1624,18 @@ function App() {
         )}
       </div>
 
+      {detailTask ? (
+        <TaskDetailDialog
+          task={detailTask}
+          onClose={() => setDetailTaskId("")}
+          onEdit={(task) => {
+            setDetailTaskId("");
+            editTask(task);
+          }}
+          onPreviewAttachment={previewAttachment}
+        />
+      ) : null}
+
       {attachmentPreview ? (
         <AttachmentPreviewDialog
           preview={attachmentPreview}
@@ -1699,7 +1765,7 @@ function AuthScreen({ draft, error, isSubmitting, mode, onModeChange, onSubmit, 
               autoFocus
               value={draft.username}
               onChange={(event) => onUpdate("username", event.target.value)}
-              placeholder="name@example.com"
+              placeholder="例如 sherlly"
             />
           </label>
 
@@ -1761,7 +1827,14 @@ function EmptyState({ icon, text }) {
   );
 }
 
-function ReportPanel({ dailyReport, visibleLogs, logRange, onLogRangeChange }) {
+function ReportPanel({
+  dailyReport,
+  visibleLogs,
+  logRange,
+  onLogRangeChange,
+  onPreviewAttachment,
+  onViewTask,
+}) {
   return (
     <div className="report-panel">
       <div className="section-toolbar report-toolbar">
@@ -1802,38 +1875,42 @@ function ReportPanel({ dailyReport, visibleLogs, logRange, onLogRangeChange }) {
         <div className="report-grid">
           <article className="report-section">
             <strong>今日完成</strong>
-            {dailyReport.sections.completedTasks.length === 0 ? (
-              <p>今天还没有完成任务。</p>
-            ) : (
-              dailyReport.sections.completedTasks.map((task) => <span key={task.id}>{task.title}</span>)
-            )}
+            <ReportTaskList
+              emptyText="今天还没有完成任务。"
+              onPreviewAttachment={onPreviewAttachment}
+              onViewTask={onViewTask}
+              tasks={dailyReport.sections.completedTasks}
+            />
           </article>
 
           <article className="report-section">
             <strong>未完成 / 逾期</strong>
-            {dailyReport.sections.overdueTasks.length === 0 ? (
-              <p>今天没有逾期任务。</p>
-            ) : (
-              dailyReport.sections.overdueTasks.map((task) => <span key={task.id}>{task.title}</span>)
-            )}
+            <ReportTaskList
+              emptyText="今天没有逾期任务。"
+              onPreviewAttachment={onPreviewAttachment}
+              onViewTask={onViewTask}
+              tasks={dailyReport.sections.overdueTasks}
+            />
           </article>
 
           <article className="report-section">
             <strong>等待他人</strong>
-            {dailyReport.sections.waitingTasks.length === 0 ? (
-              <p>今天没有等待他人的事项。</p>
-            ) : (
-              dailyReport.sections.waitingTasks.map((task) => <span key={task.id}>{task.title}</span>)
-            )}
+            <ReportTaskList
+              emptyText="今天没有等待他人的事项。"
+              onPreviewAttachment={onPreviewAttachment}
+              onViewTask={onViewTask}
+              tasks={dailyReport.sections.waitingTasks}
+            />
           </article>
 
           <article className="report-section">
             <strong>明日重点</strong>
-            {dailyReport.sections.tomorrowFocus.length === 0 ? (
-              <p>暂无重点任务。</p>
-            ) : (
-              dailyReport.sections.tomorrowFocus.map((task) => <span key={task.id}>{task.title}</span>)
-            )}
+            <ReportTaskList
+              emptyText="暂无重点任务。"
+              onPreviewAttachment={onPreviewAttachment}
+              onViewTask={onViewTask}
+              tasks={dailyReport.sections.tomorrowFocus}
+            />
           </article>
         </div>
       </div>
@@ -1852,6 +1929,215 @@ function ReportPanel({ dailyReport, visibleLogs, logRange, onLogRangeChange }) {
           ))
         )}
       </div>
+    </div>
+  );
+}
+
+function ReportTaskList({ emptyText, onPreviewAttachment, onViewTask, tasks }) {
+  if (tasks.length === 0) {
+    return <p>{emptyText}</p>;
+  }
+
+  return (
+    <div className="report-task-list">
+      {tasks.map((task) => (
+        <ReportTaskItem
+          key={task.id}
+          task={task}
+          onPreviewAttachment={onPreviewAttachment}
+          onViewTask={onViewTask}
+        />
+      ))}
+    </div>
+  );
+}
+
+function ReportTaskItem({ task, onPreviewAttachment, onViewTask }) {
+  const attachments = normalizeAttachments(task.attachments);
+  const priority = getPriorityMeta(task.priority);
+  const status = getStatusMeta(task.status);
+
+  return (
+    <article className="report-task-item">
+      <button
+        className="report-task-summary"
+        type="button"
+        onClick={() => onViewTask(task)}
+        title={`查看详情：${task.title}`}
+      >
+        <span className="report-task-title">{task.title}</span>
+        <span className="report-task-action">
+          <Eye size={14} />
+          详情
+        </span>
+        <span className="report-task-meta">
+          <em>{status.label}</em>
+          <em>{priority.label}</em>
+          {task.dueAt ? <em>{formatDateTime(task.dueAt)}</em> : null}
+          {attachments.length > 0 ? <em>附件 {attachments.length}</em> : null}
+        </span>
+      </button>
+
+      {attachments.length > 0 ? (
+        <div className="report-task-attachments" aria-label={`${task.title} 的附件`}>
+          {attachments.map((attachment) => (
+            <button
+              type="button"
+              key={attachment.id}
+              onClick={() => onPreviewAttachment(attachment)}
+              title={`预览附件：${attachment.name}`}
+            >
+              {attachment.type === "image" && attachment.path.startsWith("data:image/") ? (
+                <img className="task-attachment-thumb" src={attachment.path} alt="" />
+              ) : (
+                <Paperclip size={14} />
+              )}
+              <span>{attachment.name}</span>
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </article>
+  );
+}
+
+function TaskDetailDialog({ task, onClose, onEdit, onPreviewAttachment }) {
+  const attachments = normalizeAttachments(task.attachments);
+  const priority = getPriorityMeta(task.priority);
+  const status = getStatusMeta(task.status);
+  const dailyProgress = getDailyProgress(task);
+  const tags = Array.isArray(task.tags) ? task.tags : [];
+  const reminderAt = getTaskReminderAt(task);
+  const launchActionValue = normalizeLaunchAction(task.launchAction);
+  const launchActionMeta = launchActionTypes.find((item) => item.value === launchActionValue.type);
+
+  return (
+    <div className="modal-backdrop" role="presentation" onClick={onClose}>
+      <section
+        className="task-detail-dialog"
+        role="dialog"
+        aria-label={`任务详情：${task.title}`}
+        aria-modal="true"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="task-detail-heading">
+          <div>
+            <p className="eyebrow">Task Detail</p>
+            <h2>{task.title}</h2>
+          </div>
+          <button className="icon-button" type="button" onClick={onClose} title="关闭详情">
+            <X size={18} />
+          </button>
+        </div>
+
+        <div className="task-detail-meta">
+          <span>{status.label}</span>
+          <span>{priority.label}</span>
+          {task.dueAt ? (
+            <span>
+              <CalendarClock size={14} />
+              {formatDateTime(task.dueAt)}
+            </span>
+          ) : (
+            <span>未设置截止时间</span>
+          )}
+          {reminderAt ? (
+            <span>
+              <Bell size={14} />
+              提醒 {formatDateTime(reminderAt)}
+            </span>
+          ) : null}
+          {task.owner ? <span>负责人：{task.owner}</span> : null}
+          {task.source ? <span>来源：{task.source}</span> : null}
+          {launchActionValue.target ? (
+            <span title={launchActionValue.target}>
+              {launchActionMeta?.label || "执行动作"}：{launchActionValue.target}
+            </span>
+          ) : null}
+        </div>
+
+        {dailyProgress.isScheduled ? (
+          <>
+            <div className={`daily-progress ${dailyProgress.isReached ? "is-complete" : ""}`}>
+              <span>今日进度</span>
+              <strong>
+                {dailyProgress.done}/{dailyProgress.target}
+              </strong>
+              {dailyProgress.missed > 0 ? <em>错过 {dailyProgress.missed}</em> : null}
+            </div>
+            <div className="slot-state-list">
+              {dailyProgress.slotStates.map((slot) => (
+                <span
+                  className={[
+                    "slot-state",
+                    slot.isDone ? "is-done" : "",
+                    slot.isMissed ? "is-missed" : "",
+                    slot.isAvailable ? "is-available" : "",
+                  ]
+                    .filter(Boolean)
+                    .join(" ")}
+                  key={slot.value}
+                >
+                  {slot.label}
+                </span>
+              ))}
+            </div>
+          </>
+        ) : null}
+
+        <div className="task-detail-grid">
+          <section className="task-detail-card">
+            <strong>任务说明</strong>
+            {task.note ? <p>{task.note}</p> : <p className="task-detail-empty">暂无备注。</p>}
+            {tags.length > 0 ? (
+              <div className="tag-list task-detail-tags">
+                {tags.map((tag) => (
+                  <span key={tag}>{tag}</span>
+                ))}
+              </div>
+            ) : null}
+          </section>
+
+          <section className="task-detail-card">
+            <strong>附件</strong>
+            {attachments.length === 0 ? (
+              <p className="task-detail-empty">暂无附件。</p>
+            ) : (
+              <div className="task-detail-attachment-list">
+                {attachments.map((attachment) => (
+                  <button
+                    className="task-detail-attachment"
+                    type="button"
+                    key={attachment.id}
+                    onClick={() => onPreviewAttachment(attachment)}
+                    title={`预览附件：${attachment.name}`}
+                  >
+                    {attachment.type === "image" && attachment.path.startsWith("data:image/") ? (
+                      <img className="task-detail-thumb" src={attachment.path} alt="" />
+                    ) : (
+                      <Paperclip size={18} />
+                    )}
+                    <span>
+                      <strong>{attachment.name}</strong>
+                      <em>{attachment.type === "image" ? "图片附件" : "文件附件"}</em>
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </section>
+        </div>
+
+        <div className="task-detail-actions">
+          <button className="secondary-button" type="button" onClick={() => onEdit(task)}>
+            <FileText size={18} />
+            编辑任务
+          </button>
+          <button className="primary-button" type="button" onClick={onClose}>
+            关闭
+          </button>
+        </div>
+      </section>
     </div>
   );
 }
@@ -1919,6 +2205,7 @@ function TaskRow({
 }) {
   const priority = getPriorityMeta(task.priority);
   const status = getStatusMeta(task.status);
+  const statusTone = taskStatuses.some((item) => item.value === task.status) ? task.status : "todo";
   const overdue = isOverdue(task);
   const dailyProgress = getDailyProgress(task);
   const isScheduledTask = dailyProgress.isScheduled;
@@ -1939,7 +2226,7 @@ function TaskRow({
 
   return (
     <article
-      className={`task-row priority-${task.priority} ${overdue ? "is-overdue" : ""}`}
+      className={`task-row priority-${task.priority} status-${statusTone} ${overdue ? "is-overdue" : ""}`}
       onClick={openEditor}
       onKeyDown={handleRowKeyDown}
       role="button"
@@ -1952,7 +2239,7 @@ function TaskRow({
           <h3>{task.title}</h3>
         </div>
         <div className="task-meta">
-          <span>{status.label}</span>
+          <span className={`task-status-pill status-${statusTone}`}>{status.label}</span>
           <span>{priority.label}</span>
           <span>
             <CalendarClock size={14} />

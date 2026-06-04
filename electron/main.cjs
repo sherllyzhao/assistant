@@ -431,6 +431,7 @@ async function openAttachment(filePath) {
 
 app.setName(APP_NAME);
 app.setAppUserModelId(APP_USER_MODEL_ID);
+Menu.setApplicationMenu(null);
 
 app.whenReady().then(() => {
   ipcMain.handle("sherlly:load-data", () => readDataFile());
