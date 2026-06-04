@@ -10,7 +10,10 @@ import {
   Filter,
   Image as ImageIcon,
   Inbox,
+  KeyRound,
   ListChecks,
+  LogIn,
+  LogOut,
   Megaphone,
   MessageSquareText,
   Paperclip,
@@ -18,6 +21,7 @@ import {
   Save,
   Search,
   Trash2,
+  UserRound,
   Volume2,
   VolumeX,
   X,
@@ -54,6 +58,7 @@ import {
 } from "./lib/domain.js";
 import {
   initialData,
+  changePassword,
   isSameData,
   launchAction,
   loadAppData,
@@ -62,7 +67,12 @@ import {
   sendNotification,
   selectAttachments,
   getAttachmentPreview,
+  getStoredAccount,
+  isAuthRequiredError,
+  loginAccount,
+  logoutAccount,
   openAttachment,
+  registerAccount,
 } from "./lib/storage.js";
 
 const filterOptions = [
@@ -77,6 +87,7 @@ const filterOptions = [
 const viewOptions = [
   { value: "tasks", label: "任务看板", description: "录入、筛选和推进待办" },
   { value: "report", label: "工作日报", description: "查看日报概览与日志明细" },
+  { value: "profile", label: "个人信息", description: "查看账号并修改密码" },
 ];
 
 const cloudSyncEnabled = Boolean(import.meta.env.VITE_SHERLLY_API_URL);
@@ -93,6 +104,15 @@ const imageMimeExtensions = {
 
 function App() {
   const [data, setData] = useState(initialData);
+  const [account, setAccount] = useState(() => (cloudSyncEnabled ? getStoredAccount() : null));
+  const [authMode, setAuthMode] = useState("login");
+  const [authDraft, setAuthDraft] = useState({ username: "", password: "", displayName: "" });
+  const [authError, setAuthError] = useState("");
+  const [isAuthenticating, setIsAuthenticating] = useState(false);
+  const [syncError, setSyncError] = useState("");
+  const [passwordDraft, setPasswordDraft] = useState({ currentPassword: "", nextPassword: "", confirmPassword: "" });
+  const [passwordStatus, setPasswordStatus] = useState({ type: "", message: "" });
+  const [isPasswordSaving, setIsPasswordSaving] = useState(false);
   const [draft, setDraft] = useState(emptyTaskDraft);
   const [editingId, setEditingId] = useState("");
   const [wechatText, setWechatText] = useState("");
@@ -108,32 +128,78 @@ function App() {
   const titleInputRef = useRef(null);
 
   useEffect(() => {
+    let isCancelled = false;
+
+    if (cloudSyncEnabled && !account) {
+      setData(initialData);
+      setIsLoaded(true);
+      return () => {
+        isCancelled = true;
+      };
+    }
+
+    setIsLoaded(false);
     loadAppData()
       .then((loadedData) => {
+        if (isCancelled) {
+          return;
+        }
+
         setData(loadedData);
+        setAuthError("");
+        setSyncError("");
         setIsLoaded(true);
       })
       .catch((error) => {
+        if (isCancelled) {
+          return;
+        }
+
         console.error(error);
-        setIsLoaded(true);
+
+        if (isAuthRequiredError(error)) {
+          setAccount(null);
+          setAuthError(error.message || "请先登录 Sherlly 账号");
+          setSyncError("");
+          setIsLoaded(true);
+          return;
+        }
+
+        setSyncError(error.message || "云端读取失败，请检查网络或后台服务");
+        setIsLoaded(false);
       });
-  }, []);
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [account?.id]);
 
   useEffect(() => {
-    if (!isLoaded) {
+    if (!isLoaded || (cloudSyncEnabled && !account)) {
       return;
     }
 
     window.clearTimeout(saveTimerRef.current);
     saveTimerRef.current = window.setTimeout(() => {
-      saveAppData(data).catch((error) => console.error(error));
+      saveAppData(data).catch((error) => {
+        console.error(error);
+
+        if (isAuthRequiredError(error)) {
+          setAccount(null);
+          setAuthError(error.message || "请重新登录 Sherlly 账号");
+          setSyncError("");
+          return;
+        }
+
+        setSyncError(error.message || "云端保存失败，已尽量保留本地缓存");
+      });
     }, 250);
 
     return () => window.clearTimeout(saveTimerRef.current);
-  }, [data, isLoaded]);
+  }, [account, data, isLoaded]);
 
   useEffect(() => {
-    if (!isLoaded || !cloudSyncEnabled) {
+    if (!isLoaded || !cloudSyncEnabled || !account) {
       return;
     }
 
@@ -151,7 +217,18 @@ function App() {
             return isSameData(current, mergedData) ? current : mergedData;
           });
         })
-        .catch((error) => console.error(error));
+        .catch((error) => {
+          console.error(error);
+
+          if (isAuthRequiredError(error)) {
+            setAccount(null);
+            setAuthError(error.message || "请重新登录 Sherlly 账号");
+            setSyncError("");
+            return;
+          }
+
+          setSyncError(error.message || "云端同步失败，请稍后重试");
+        });
     };
 
     syncFromCloud();
@@ -161,7 +238,7 @@ function App() {
       isCancelled = true;
       window.clearInterval(intervalId);
     };
-  }, [isLoaded]);
+  }, [account, isLoaded]);
 
   useEffect(() => {
     const handleQuickCapture = () => activateQuickCapture("快捷键速记");
@@ -345,15 +422,6 @@ function App() {
   function notifyWithFallback(payload) {
     pushReminderAlert(payload);
     sendNotification(payload).catch((error) => console.error(error));
-  }
-
-  function testReminder() {
-    notifyWithFallback({
-      title: "测试提醒",
-      body: "如果你能看到这条，应用内提醒已经生效；系统通知取决于 Windows/浏览器权限。",
-      sound: data.settings.soundEnabled,
-      flash: true,
-    });
   }
 
   function focusTaskTitle() {
@@ -969,6 +1037,109 @@ function App() {
     }));
   }
 
+  function updateAuthDraft(field, value) {
+    setAuthDraft((current) => ({ ...current, [field]: value }));
+  }
+
+  function switchAuthMode(nextMode) {
+    setAuthMode(nextMode);
+    setAuthError("");
+  }
+
+  async function submitAuth(event) {
+    event.preventDefault();
+    setAuthError("");
+    setIsAuthenticating(true);
+
+    try {
+      const auth =
+        authMode === "register" ? await registerAccount(authDraft) : await loginAccount(authDraft);
+
+      setAccount(auth.user);
+      setAuthDraft({ username: authDraft.username, password: "", displayName: authDraft.displayName });
+      setData(initialData);
+      setIsLoaded(false);
+    } catch (error) {
+      console.error(error);
+      setAuthError(error.message || "登录失败，请稍后重试");
+    } finally {
+      setIsAuthenticating(false);
+    }
+  }
+
+  async function handleLogout() {
+    setAuthError("");
+
+    try {
+      await logoutAccount();
+    } catch (error) {
+      console.error(error);
+    }
+
+    setAccount(null);
+    setData(initialData);
+    setPasswordDraft({ currentPassword: "", nextPassword: "", confirmPassword: "" });
+    setPasswordStatus({ type: "", message: "" });
+    setIsLoaded(true);
+  }
+
+  function updatePasswordDraft(field, value) {
+    setPasswordDraft((current) => ({ ...current, [field]: value }));
+    setPasswordStatus({ type: "", message: "" });
+  }
+
+  async function submitPasswordChange(event) {
+    event.preventDefault();
+    setPasswordStatus({ type: "", message: "" });
+
+    if (passwordDraft.nextPassword !== passwordDraft.confirmPassword) {
+      setPasswordStatus({ type: "error", message: "两次输入的新密码不一致" });
+      return;
+    }
+
+    if (passwordDraft.nextPassword.length < 6) {
+      setPasswordStatus({ type: "error", message: "新密码至少需要 6 位" });
+      return;
+    }
+
+    setIsPasswordSaving(true);
+
+    try {
+      const result = await changePassword(passwordDraft);
+      setPasswordDraft({ currentPassword: "", nextPassword: "", confirmPassword: "" });
+      setPasswordStatus({
+        type: "success",
+        message: `密码已更新，已退出其他设备 ${result?.signedOutSessions || 0} 个会话。`,
+      });
+    } catch (error) {
+      console.error(error);
+
+      if (isAuthRequiredError(error)) {
+        setAccount(null);
+        setAuthError(error.message || "请重新登录 Sherlly 账号");
+        return;
+      }
+
+      setPasswordStatus({ type: "error", message: error.message || "修改密码失败，请稍后重试" });
+    } finally {
+      setIsPasswordSaving(false);
+    }
+  }
+
+  if (cloudSyncEnabled && !account) {
+    return (
+      <AuthScreen
+        draft={authDraft}
+        error={authError}
+        isSubmitting={isAuthenticating}
+        mode={authMode}
+        onModeChange={switchAuthMode}
+        onSubmit={submitAuth}
+        onUpdate={updateAuthDraft}
+      />
+    );
+  }
+
   return (
     <main className="app-shell">
       <header className="topbar">
@@ -977,12 +1148,19 @@ function App() {
           <h1>工作事项闭环</h1>
         </div>
         <div className="topbar-actions">
+          {account ? (
+            <>
+              <button className="account-chip" type="button" onClick={() => setActiveView("profile")} title="个人信息">
+                <UserRound size={16} />
+                <span>{account.displayName || account.username}</span>
+              </button>
+              <button className="icon-button" type="button" onClick={handleLogout} title="退出登录">
+                <LogOut size={18} />
+              </button>
+            </>
+          ) : null}
           <button className="icon-button" type="button" onClick={toggleSound} title="切换声音提醒">
             {data.settings.soundEnabled ? <Volume2 size={18} /> : <VolumeX size={18} />}
-          </button>
-          <button className="secondary-button reminder-test-button" type="button" onClick={testReminder}>
-            <Bell size={18} />
-            测试提醒
           </button>
           <button className="primary-button" type="button" onClick={() => activateQuickCapture("手动录入")}>
             <Plus size={18} />
@@ -991,6 +1169,12 @@ function App() {
           </button>
         </div>
       </header>
+
+      {syncError ? (
+        <section className="sync-error-banner" role="alert">
+          {syncError}
+        </section>
+      ) : null}
 
       {reminderAlerts.length > 0 ? (
         <section className="reminder-alerts" aria-label="提醒消息" aria-live="polite" role="status">
@@ -1031,8 +1215,11 @@ function App() {
         ))}
       </section>
 
-      <div className="workspace-grid">
-        <section className="task-area" aria-label={activeView === "tasks" ? "任务列表" : "工作日报"}>
+      <div className={`workspace-grid ${activeView === "profile" ? "profile-grid" : ""}`}>
+        <section
+          className="task-area"
+          aria-label={activeView === "tasks" ? "任务列表" : activeView === "profile" ? "个人信息" : "工作日报"}
+        >
           {activeView === "tasks" ? (
             <>
               <div className="section-toolbar">
@@ -1084,6 +1271,15 @@ function App() {
                 )}
               </div>
             </>
+          ) : activeView === "profile" ? (
+            <ProfilePanel
+              account={account}
+              draft={passwordDraft}
+              isSubmitting={isPasswordSaving}
+              onSubmit={submitPasswordChange}
+              onUpdate={updatePasswordDraft}
+              status={passwordStatus}
+            />
           ) : (
             <ReportPanel
               dailyReport={dailyReport}
@@ -1094,6 +1290,7 @@ function App() {
           )}
         </section>
 
+        {activeView === "profile" ? null : (
         <aside className="side-rail" aria-label="录入与候选任务">
           <section className="panel">
             <div className="panel-heading">
@@ -1370,6 +1567,7 @@ function App() {
           </section>
 
         </aside>
+        )}
       </div>
 
       {attachmentPreview ? (
@@ -1379,6 +1577,167 @@ function App() {
           onOpen={openTaskAttachment}
         />
       ) : null}
+    </main>
+  );
+}
+
+function ProfilePanel({ account, draft, isSubmitting, onSubmit, onUpdate, status }) {
+  return (
+    <div className="profile-panel">
+      <div className="section-toolbar profile-toolbar">
+        <div>
+          <p className="eyebrow">Account</p>
+          <h2>个人信息</h2>
+        </div>
+        <UserRound size={20} />
+      </div>
+
+      <div className="profile-grid-inner">
+        <section className="profile-card">
+          <strong>账号资料</strong>
+          <dl className="account-details">
+            <div>
+              <dt>昵称</dt>
+              <dd>{account?.displayName || account?.username || "未设置"}</dd>
+            </div>
+            <div>
+              <dt>账号</dt>
+              <dd>{account?.username || "未登录"}</dd>
+            </div>
+            <div>
+              <dt>用户 ID</dt>
+              <dd>{account?.id || "-"}</dd>
+            </div>
+          </dl>
+        </section>
+
+        <section className="profile-card">
+          <strong>修改密码</strong>
+          <form className="password-form" onSubmit={onSubmit}>
+            <label>
+              当前密码
+              <input
+                autoComplete="current-password"
+                type="password"
+                value={draft.currentPassword}
+                onChange={(event) => onUpdate("currentPassword", event.target.value)}
+              />
+            </label>
+            <label>
+              新密码
+              <input
+                autoComplete="new-password"
+                type="password"
+                value={draft.nextPassword}
+                onChange={(event) => onUpdate("nextPassword", event.target.value)}
+                placeholder="至少 6 位"
+              />
+            </label>
+            <label>
+              确认新密码
+              <input
+                autoComplete="new-password"
+                type="password"
+                value={draft.confirmPassword}
+                onChange={(event) => onUpdate("confirmPassword", event.target.value)}
+              />
+            </label>
+
+            {status?.message ? (
+              <p className={`profile-message ${status.type === "success" ? "is-success" : "is-error"}`} role="alert">
+                {status.message}
+              </p>
+            ) : null}
+
+            <button className="primary-button" type="submit" disabled={isSubmitting}>
+              <KeyRound size={18} />
+              {isSubmitting ? "保存中" : "保存新密码"}
+            </button>
+          </form>
+        </section>
+      </div>
+    </div>
+  );
+}
+
+function AuthScreen({ draft, error, isSubmitting, mode, onModeChange, onSubmit, onUpdate }) {
+  const isRegister = mode === "register";
+
+  return (
+    <main className="auth-shell">
+      <section className="auth-panel" aria-label="Sherlly 账号登录">
+        <div className="auth-heading">
+          <div>
+            <p className="eyebrow">Sherlly Assistant</p>
+            <h1>{isRegister ? "创建账号" : "账号登录"}</h1>
+          </div>
+          <UserRound size={22} />
+        </div>
+
+        <div className="segmented-control compact auth-mode" aria-label="登录模式">
+          <button
+            className={!isRegister ? "is-active" : ""}
+            type="button"
+            onClick={() => onModeChange("login")}
+          >
+            登录
+          </button>
+          <button
+            className={isRegister ? "is-active" : ""}
+            type="button"
+            onClick={() => onModeChange("register")}
+          >
+            注册
+          </button>
+        </div>
+
+        <form className="auth-form" onSubmit={onSubmit}>
+          <label>
+            账号
+            <input
+              autoComplete="username"
+              autoFocus
+              value={draft.username}
+              onChange={(event) => onUpdate("username", event.target.value)}
+              placeholder="name@example.com"
+            />
+          </label>
+
+          {isRegister ? (
+            <label>
+              昵称
+              <input
+                autoComplete="name"
+                value={draft.displayName}
+                onChange={(event) => onUpdate("displayName", event.target.value)}
+                placeholder="Sherlly"
+              />
+            </label>
+          ) : null}
+
+          <label>
+            密码
+            <input
+              autoComplete={isRegister ? "new-password" : "current-password"}
+              type="password"
+              value={draft.password}
+              onChange={(event) => onUpdate("password", event.target.value)}
+              placeholder="至少 6 位"
+            />
+          </label>
+
+          {error ? (
+            <p className="auth-error" role="alert">
+              {error}
+            </p>
+          ) : null}
+
+          <button className="primary-button full-width" type="submit" disabled={isSubmitting}>
+            <LogIn size={18} />
+            {isSubmitting ? "处理中" : isRegister ? "注册并登录" : "登录"}
+          </button>
+        </form>
+      </section>
     </main>
   );
 }

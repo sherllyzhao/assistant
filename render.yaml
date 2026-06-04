@@ -15,8 +15,12 @@ services:
         value: sherlly
       - key: MONGODB_COLLECTION
         value: appData
-      - key: SHERLLY_USER_ID
-        value: default
+      - key: MONGODB_USERS_COLLECTION
+        value: users
+      - key: MONGODB_SESSIONS_COLLECTION
+        value: sessions
+      - key: SHERLLY_SESSION_TTL_DAYS
+        value: 30
       - key: SHERLLY_API_TOKEN
         sync: false
       - key: CORS_ORIGIN

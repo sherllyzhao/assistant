@@ -1,6 +1,8 @@
 const fallbackStorageKey = "sherlly-assistant:v1";
+const scopedFallbackStoragePrefix = "sherlly-assistant:v1:data";
+const migrationStoragePrefix = "sherlly-assistant:v1:migrated";
+const authStorageKey = "sherlly-assistant:auth:v1";
 const cloudApiBaseUrl = String(import.meta.env.VITE_SHERLLY_API_URL || "").replace(/\/+$/, "");
-const cloudUserId = String(import.meta.env.VITE_SHERLLY_USER_ID || "default");
 const cloudApiToken = String(import.meta.env.VITE_SHERLLY_API_TOKEN || "").trim();
 
 export const initialData = {
@@ -24,13 +26,144 @@ function normalizeData(data) {
   };
 }
 
-function getFallbackData() {
-  const raw = window.localStorage.getItem(fallbackStorageKey);
-  return raw ? normalizeData(JSON.parse(raw)) : initialData;
+function readStorageJson(key) {
+  try {
+    const raw = window.localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : null;
+  } catch (error) {
+    console.error(error);
+    return null;
+  }
 }
 
-async function loadLocalDataForMigration() {
-  const fallbackData = getFallbackData();
+function writeStorageJson(key, value) {
+  window.localStorage.setItem(key, JSON.stringify(value));
+}
+
+function normalizeStorageScope(value) {
+  return (
+    String(value || "guest")
+      .trim()
+      .replace(/[^\w:.-]/g, "_")
+      .slice(0, 80) || "guest"
+  );
+}
+
+function getScopedFallbackStorageKey(scope) {
+  return `${scopedFallbackStoragePrefix}:${normalizeStorageScope(scope)}`;
+}
+
+function getMigrationStorageKey(scope) {
+  return `${migrationStoragePrefix}:${normalizeStorageScope(scope)}`;
+}
+
+function normalizeAccount(user) {
+  if (!user?.id) {
+    return null;
+  }
+
+  return {
+    id: String(user.id),
+    username: String(user.username || ""),
+    displayName: String(user.displayName || user.username || ""),
+  };
+}
+
+function normalizeAuthPayload(payload) {
+  const user = normalizeAccount(payload?.user);
+  const token = String(payload?.token || "").trim();
+
+  if (!user || !token) {
+    throw new Error("登录响应缺少账号信息");
+  }
+
+  return {
+    user,
+    token,
+    expiresAt: String(payload?.expiresAt || ""),
+  };
+}
+
+export function isCloudSyncEnabled() {
+  return Boolean(cloudApiBaseUrl);
+}
+
+export function getStoredAuth() {
+  const auth = readStorageJson(authStorageKey);
+
+  if (!auth?.token) {
+    return null;
+  }
+
+  const user = normalizeAccount(auth.user);
+
+  if (!user) {
+    return null;
+  }
+
+  return {
+    user,
+    token: String(auth.token),
+    expiresAt: String(auth.expiresAt || ""),
+  };
+}
+
+export function getStoredAccount() {
+  return getStoredAuth()?.user || null;
+}
+
+function saveStoredAuth(auth) {
+  const normalized = normalizeAuthPayload(auth);
+  writeStorageJson(authStorageKey, normalized);
+  return normalized;
+}
+
+export function clearStoredAuth() {
+  window.localStorage.removeItem(authStorageKey);
+}
+
+function getCurrentStorageScope() {
+  return getStoredAccount()?.id || "guest";
+}
+
+function getFallbackData(scope = getCurrentStorageScope()) {
+  const scopedData = readStorageJson(getScopedFallbackStorageKey(scope));
+  const legacyData = readStorageJson(fallbackStorageKey);
+
+  if (scopedData && legacyData) {
+    return mergeData(scopedData, legacyData);
+  }
+
+  if (scopedData) {
+    return normalizeData(scopedData);
+  }
+
+  return legacyData ? normalizeData(legacyData) : initialData;
+}
+
+function saveFallbackData(scope, data) {
+  writeStorageJson(getScopedFallbackStorageKey(scope), normalizeData(data));
+}
+
+function clearFallbackData(scope) {
+  window.localStorage.removeItem(getScopedFallbackStorageKey(scope));
+  window.localStorage.removeItem(fallbackStorageKey);
+}
+
+function hasCompletedMigration(scope) {
+  return window.localStorage.getItem(getMigrationStorageKey(scope)) === "true";
+}
+
+function markMigrationComplete(scope) {
+  window.localStorage.setItem(getMigrationStorageKey(scope), "true");
+}
+
+async function loadLocalDataForMigration(scope) {
+  if (hasCompletedMigration(scope)) {
+    return initialData;
+  }
+
+  const fallbackData = getFallbackData(scope);
 
   if (!window.sherlly?.loadData) {
     return fallbackData;
@@ -95,60 +228,196 @@ export function isSameData(left, right) {
   return JSON.stringify(normalizeData(left)) === JSON.stringify(normalizeData(right));
 }
 
-async function loadCloudData() {
-  const response = await fetch(`${cloudApiBaseUrl}/api/data?userId=${encodeURIComponent(cloudUserId)}`, {
-    headers: getCloudHeaders(),
-  });
+function createAuthRequiredError(message = "请先登录 Sherlly 账号") {
+  const error = new Error(message);
+  error.code = "AUTH_REQUIRED";
+  error.status = 401;
+  return error;
+}
 
-  if (!response.ok) {
-    throw new Error(`云端读取失败：${response.status}`);
+export function isAuthRequiredError(error) {
+  return error?.code === "AUTH_REQUIRED" || error?.status === 401;
+}
+
+async function parseCloudResponse(response, fallbackMessage) {
+  let body = null;
+
+  try {
+    body = await response.json();
+  } catch {
+    body = null;
   }
 
-  return normalizeData(await response.json());
+  if (!response.ok) {
+    const error = new Error(body?.message || `${fallbackMessage}：${response.status}`);
+    error.status = response.status;
+
+    if (response.status === 401) {
+      error.code = "AUTH_REQUIRED";
+    }
+
+    throw error;
+  }
+
+  return body;
+}
+
+async function requestCloud(path, options = {}) {
+  const response = await fetch(`${cloudApiBaseUrl}${path}`, {
+    ...options,
+    headers: getCloudHeaders(options.headers, options.authToken),
+  });
+
+  return parseCloudResponse(response, options.fallbackMessage || "云端请求失败");
+}
+
+async function loadCloudData() {
+  return normalizeData(await requestCloud("/api/data", { fallbackMessage: "云端读取失败" }));
 }
 
 async function saveCloudData(data) {
-  const response = await fetch(`${cloudApiBaseUrl}/api/data?userId=${encodeURIComponent(cloudUserId)}`, {
+  return normalizeData(await requestCloud("/api/data", {
     method: "PUT",
-    headers: getCloudHeaders({ "Content-Type": "application/json" }),
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(normalizeData(data)),
-  });
-
-  if (!response.ok) {
-    throw new Error(`云端保存失败：${response.status}`);
-  }
-
-  return normalizeData(await response.json());
+    fallbackMessage: "云端保存失败",
+  }));
 }
 
-function getCloudHeaders(headers = {}) {
-  if (!cloudApiToken) {
-    return headers;
+function getCloudHeaders(headers = {}, authToken = getStoredAuth()?.token) {
+  const nextHeaders = {
+    ...headers,
+  };
+
+  if (cloudApiToken) {
+    nextHeaders["X-Sherlly-Token"] = cloudApiToken;
   }
 
-  return {
-    ...headers,
-    Authorization: `Bearer ${cloudApiToken}`,
-  };
+  if (authToken) {
+    nextHeaders.Authorization = `Bearer ${authToken}`;
+  }
+
+  return nextHeaders;
+}
+
+export async function loginAccount(credentials) {
+  const auth = await requestCloud("/api/auth/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    authToken: "",
+    body: JSON.stringify({
+      username: credentials?.username,
+      password: credentials?.password,
+    }),
+    fallbackMessage: "登录失败",
+  });
+
+  return saveStoredAuth(auth);
+}
+
+export async function registerAccount(credentials) {
+  const auth = await requestCloud("/api/auth/register", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    authToken: "",
+    body: JSON.stringify({
+      username: credentials?.username,
+      password: credentials?.password,
+      displayName: credentials?.displayName,
+    }),
+    fallbackMessage: "注册失败",
+  });
+
+  return saveStoredAuth(auth);
+}
+
+export async function loadCurrentAccount() {
+  const auth = getStoredAuth();
+
+  if (!auth) {
+    return null;
+  }
+
+  const payload = await requestCloud("/api/auth/me", {
+    fallbackMessage: "登录校验失败",
+  });
+  const user = normalizeAccount(payload?.user);
+
+  if (!user) {
+    clearStoredAuth();
+    throw createAuthRequiredError("登录已失效，请重新登录");
+  }
+
+  saveStoredAuth({
+    ...auth,
+    user,
+  });
+
+  return user;
+}
+
+export async function changePassword(payload) {
+  return requestCloud("/api/auth/password", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      currentPassword: payload?.currentPassword,
+      nextPassword: payload?.nextPassword,
+    }),
+    fallbackMessage: "修改密码失败",
+  });
+}
+
+export async function logoutAccount() {
+  try {
+    if (cloudApiBaseUrl && getStoredAuth()) {
+      await requestCloud("/api/auth/logout", {
+        method: "POST",
+        fallbackMessage: "退出登录失败",
+      });
+    }
+  } finally {
+    clearStoredAuth();
+  }
 }
 
 export async function loadAppData() {
   if (cloudApiBaseUrl) {
+    const auth = getStoredAuth();
+
+    if (!auth) {
+      throw createAuthRequiredError();
+    }
+
     try {
       const cloudData = await loadCloudData();
-      const localData = await loadLocalDataForMigration();
+      const localData = await loadLocalDataForMigration(auth.user.id);
 
       if (hasMeaningfulData(localData)) {
         const mergedData = mergeData(cloudData, localData);
         await saveCloudData(mergedData);
-        window.localStorage.removeItem(fallbackStorageKey);
+        clearFallbackData(auth.user.id);
+        markMigrationComplete(auth.user.id);
         return mergedData;
       }
 
+      markMigrationComplete(auth.user.id);
       return cloudData;
     } catch (error) {
       console.error(error);
-      return getFallbackData();
+
+      if (isAuthRequiredError(error)) {
+        clearStoredAuth();
+        throw error;
+      }
+
+      const fallbackData = getFallbackData(auth.user.id);
+
+      if (hasMeaningfulData(fallbackData)) {
+        return fallbackData;
+      }
+
+      throw error;
     }
   }
 
@@ -156,18 +425,30 @@ export async function loadAppData() {
     return normalizeData(await window.sherlly.loadData());
   }
 
-  return getFallbackData();
+  return getFallbackData("guest");
 }
 
 export async function saveAppData(data) {
   const normalized = normalizeData(data);
 
   if (cloudApiBaseUrl) {
+    const auth = getStoredAuth();
+
+    if (!auth) {
+      throw createAuthRequiredError();
+    }
+
     try {
       return await saveCloudData(normalized);
     } catch (error) {
       console.error(error);
-      window.localStorage.setItem(fallbackStorageKey, JSON.stringify(normalized));
+
+      if (isAuthRequiredError(error)) {
+        clearStoredAuth();
+        throw error;
+      }
+
+      saveFallbackData(auth.user.id, normalized);
       return normalized;
     }
   }
@@ -176,7 +457,7 @@ export async function saveAppData(data) {
     return window.sherlly.saveData(normalized);
   }
 
-  window.localStorage.setItem(fallbackStorageKey, JSON.stringify(normalized));
+  saveFallbackData("guest", normalized);
   return normalized;
 }
 

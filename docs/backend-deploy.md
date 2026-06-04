@@ -5,7 +5,7 @@
 ## 推荐平台
 
 - Render / Railway / Fly.io / 自己的云服务器都可以直接运行当前后台。
-- Cloudflare Workers 已提供独立实现：`cloudflare/worker.js` 使用 Cloudflare KV 保存同步数据，并兼容现有 `/health`、`/ready`、`/api/data` 接口。
+- Cloudflare Workers 已提供独立实现：`cloudflare/worker.js` 使用 Cloudflare KV 保存账号、登录会话和同步数据，并兼容 `/health`、`/ready`、`/api/auth/*`、`/api/data` 接口。
 
 ## 必填环境变量
 
@@ -14,12 +14,14 @@ PORT=8787
 MONGODB_URI=mongodb+srv://<username>:<password>@<cluster-url>/sherlly?retryWrites=true&w=majority
 MONGODB_DB=sherlly
 MONGODB_COLLECTION=appData
-SHERLLY_USER_ID=default
+MONGODB_USERS_COLLECTION=users
+MONGODB_SESSIONS_COLLECTION=sessions
+SHERLLY_SESSION_TTL_DAYS=30
 SHERLLY_API_TOKEN=<一段足够长的随机字符串>
 CORS_ORIGIN=*
 ```
 
-`SHERLLY_API_TOKEN` 配置后，所有 `/api/*` 请求都必须带 `Authorization: Bearer <token>`。
+`SHERLLY_API_TOKEN` 是后台访问门禁；前端会用 `X-Sherlly-Token` 发送它。账号登录成功后，用户会话 token 使用 `Authorization: Bearer <login-token>` 发送，数据归属于该登录账号。
 
 ## Render 部署
 
@@ -32,6 +34,7 @@ CORS_ORIGIN=*
 5. 在 Render 环境变量里配置 `MONGODB_URI` 和 `SHERLLY_API_TOKEN`。
 6. 部署成功后访问 `https://你的服务域名/health`，看到 `{ "ok": true }` 即后台可访问。
 7. 访问 `https://你的服务域名/ready`，确认 MongoDB 连通。
+8. 前端第一次连接线上后台时，在应用内注册账号；之后换电脑登录同一账号即可同步同一份数据。
 
 ## Docker 部署
 
@@ -89,7 +92,9 @@ npm run cf:deploy
 ```bash
 curl https://你的-worker域名/health
 curl https://你的-worker域名/ready
-curl -H "Authorization: Bearer <token>" "https://你的-worker域名/api/data?userId=default"
+curl -X POST -H "Content-Type: application/json" -H "X-Sherlly-Token: <后台token>" \
+  -d "{\"username\":\"demo@example.com\",\"password\":\"secret123\"}" \
+  "https://你的-worker域名/api/auth/register"
 ```
 
 ## exe 连接线上后台
@@ -98,7 +103,6 @@ curl -H "Authorization: Bearer <token>" "https://你的-worker域名/api/data?us
 
 ```env
 VITE_SHERLLY_API_URL=https://你的服务域名
-VITE_SHERLLY_USER_ID=default
 VITE_SHERLLY_API_TOKEN=<和后台一致的 token>
 ```
 
@@ -109,5 +113,7 @@ VITE_SHERLLY_API_TOKEN=<和后台一致的 token>
 ```bash
 curl https://你的服务域名/health
 curl https://你的服务域名/ready
-curl -H "Authorization: Bearer <token>" "https://你的服务域名/api/data?userId=default"
+curl -X POST -H "Content-Type: application/json" -H "X-Sherlly-Token: <后台token>" \
+  -d "{\"username\":\"demo@example.com\",\"password\":\"secret123\"}" \
+  "https://你的服务域名/api/auth/login"
 ```

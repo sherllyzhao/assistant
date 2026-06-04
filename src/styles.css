@@ -46,6 +46,11 @@ button {
   cursor: pointer;
 }
 
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
 .app-shell {
   width: min(1440px, calc(100vw - 32px));
   margin: 0 auto;
@@ -53,9 +58,11 @@ button {
 }
 
 .topbar,
+.auth-heading,
 .section-toolbar,
 .panel-heading,
 .topbar-actions,
+.account-chip,
 .task-title-line,
 .task-meta,
 .task-actions,
@@ -97,10 +104,96 @@ button {
 
 .topbar-actions {
   gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
-.reminder-test-button {
+.account-chip {
+  gap: 7px;
+  max-width: 220px;
   min-height: 38px;
+  padding: 0 12px;
+  color: var(--accent-strong);
+  background: var(--accent-soft);
+  border: 1px solid rgba(18, 113, 95, 0.26);
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.account-chip span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.auth-shell {
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+  padding: 24px;
+}
+
+.auth-panel {
+  width: min(420px, 100%);
+  padding: 22px;
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+}
+
+.auth-heading {
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.auth-heading h1 {
+  margin: 0;
+  font-size: 28px;
+  letter-spacing: 0;
+}
+
+.auth-heading svg {
+  color: var(--accent);
+}
+
+.auth-mode {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.auth-mode button {
+  width: 100%;
+}
+
+.auth-form {
+  display: grid;
+  gap: 13px;
+}
+
+.auth-error {
+  margin: 0;
+  padding: 10px 12px;
+  color: var(--danger);
+  background: var(--danger-soft);
+  border: 1px solid rgba(201, 71, 56, 0.24);
+  border-radius: 8px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.sync-error-banner {
+  margin: -8px 0 16px;
+  padding: 11px 13px;
+  color: var(--danger);
+  background: var(--danger-soft);
+  border: 1px solid rgba(201, 71, 56, 0.24);
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1.5;
 }
 
 .reminder-alerts {
@@ -259,7 +352,7 @@ button {
 
 .view-switcher {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
   margin-bottom: 16px;
 }
@@ -351,6 +444,10 @@ button {
   align-items: start;
 }
 
+.workspace-grid.profile-grid {
+  grid-template-columns: 1fr;
+}
+
 .task-area,
 .panel {
   padding: 18px;
@@ -408,6 +505,14 @@ button {
 
 .segmented-control.compact {
   margin-bottom: 10px;
+}
+
+.segmented-control.auth-mode {
+  width: 100%;
+}
+.segmented-control.auth-mode button {
+  flex: 1;
+  box-sizing: border-box;
 }
 
 .task-list,
@@ -963,6 +1068,92 @@ textarea:focus {
   min-height: 420px;
 }
 
+.profile-panel {
+  min-height: 420px;
+}
+
+.profile-toolbar svg {
+  color: var(--accent);
+}
+
+.profile-grid-inner {
+  display: grid;
+  grid-template-columns: minmax(0, 0.92fr) minmax(0, 1.08fr);
+  gap: 12px;
+}
+
+.profile-card {
+  padding: 16px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.profile-card > strong {
+  display: block;
+  margin-bottom: 12px;
+  font-size: 15px;
+}
+
+.account-details {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+}
+
+.account-details div {
+  display: grid;
+  grid-template-columns: 88px minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+  min-height: 34px;
+  padding: 9px 10px;
+  background: var(--surface-muted);
+  border-radius: 8px;
+}
+
+.account-details dt {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.account-details dd {
+  margin: 0;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.password-form {
+  display: grid;
+  gap: 12px;
+}
+
+.password-form .primary-button {
+  width: fit-content;
+}
+
+.profile-message {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1.5;
+}
+
+.profile-message.is-success {
+  color: var(--success);
+  background: #e6f3e9;
+  border: 1px solid rgba(40, 122, 69, 0.22);
+}
+
+.profile-message.is-error {
+  color: var(--danger);
+  background: var(--danger-soft);
+  border: 1px solid rgba(201, 71, 56, 0.24);
+}
+
 .report-toolbar svg {
   color: var(--accent);
 }
@@ -1160,6 +1351,7 @@ textarea:focus {
   .task-row,
   .task-actions,
   .side-rail,
+  .profile-grid-inner,
   .view-switcher,
   .metrics-grid {
     grid-template-columns: 1fr;
@@ -1184,7 +1376,17 @@ textarea:focus {
 
   .topbar-actions {
     display: grid;
-    grid-template-columns: auto 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .topbar-actions .account-chip {
+    grid-column: 1 / -1;
+    max-width: none;
+  }
+
+  .topbar-actions .icon-button,
+  .topbar-actions .primary-button {
+    width: 100%;
   }
 
   .reminder-alerts {
@@ -1210,5 +1412,14 @@ textarea:focus {
 
   .report-grid {
     grid-template-columns: 1fr;
+  }
+
+  .account-details div {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+
+  .password-form .primary-button {
+    width: 100%;
   }
 }

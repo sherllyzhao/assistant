@@ -16,7 +16,7 @@
     }
   ],
   "vars": {
-    "SHERLLY_USER_ID": "default",
+    "SHERLLY_SESSION_TTL_DAYS": "30",
     "CORS_ORIGIN": "*"
   }
 }
