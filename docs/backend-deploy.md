@@ -137,6 +137,12 @@ npm run pack:win
 
 内置 `dist` 只是兜底页面；`vite.config.js` 使用 `base: "./"`，这样兜底页面通过 Electron 的 `file://` 方式加载时，JS/CSS 资源仍会走相对路径，不会因为 `/assets/...` 指向磁盘根目录而白屏。
 
+仓库已提供 `.github/workflows/deploy-frontend.yml`，默认把前端部署到 GitHub Pages。当前仓库的默认前端地址是：
+
+```text
+https://sherllyzhao.github.io/--/
+```
+
 ## GitHub Releases 自动发布安装包
 
 仓库已提供 `.github/workflows/release-desktop.yml`。它会监听 `main` / `master` 分支上的 `package.json` 改动；只有 `version` 字段发生变化时，才会按这个版本自动发布安装包。
@@ -147,7 +153,7 @@ npm run pack:win
 - Repository variable `VITE_SHERLLY_API_URL`：线上后台 API 地址，用作安装包内置页面的回退配置。
 - Repository secret `VITE_SHERLLY_API_TOKEN`：和后台 `SHERLLY_API_TOKEN` 一致。
 
-`SHERLLY_RENDERER_URL` 是桌面端远程页面模式的必填项。GitHub Actions 发包时会执行 `npm run renderer:config -- --require-url`，如果这个变量没配，会直接失败，避免上传一个不能实现“页面更新无需重发 exe”的安装包。
+`SHERLLY_RENDERER_URL` 是桌面端远程页面地址。如果这个变量没配，GitHub Actions 会自动使用当前仓库的 GitHub Pages 地址：`https://sherllyzhao.github.io/--/`。如果你以后换到 Cloudflare Pages / Vercel / 自定义域名，再把 `SHERLLY_RENDERER_URL` 改成新地址即可。
 
 发布步骤示例：
 

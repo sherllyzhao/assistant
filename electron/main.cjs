@@ -100,7 +100,10 @@ function normalizeRendererUrl(value) {
       return "";
     }
 
-    return parsedUrl.toString().replace(/\/$/, "");
+    const normalizedUrl = parsedUrl.toString();
+    const isOriginOnly = parsedUrl.pathname === "/" && !parsedUrl.search && !parsedUrl.hash;
+
+    return isOriginOnly ? normalizedUrl.replace(/\/$/, "") : normalizedUrl;
   } catch {
     return "";
   }

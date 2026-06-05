@@ -118,6 +118,19 @@ jobs:
         if: steps.version_change.outputs.changed == 'true'
         run: npm ci
 
+      - name: Resolve desktop renderer URL
+        if: steps.version_change.outputs.changed == 'true'
+        shell: bash
+        run: |
+          renderer_url="${SHERLLY_RENDERER_URL:-}"
+
+          if [ -z "$renderer_url" ]; then
+            renderer_url="https://${GITHUB_REPOSITORY_OWNER}.github.io/${GITHUB_REPOSITORY#*/}/"
+          fi
+
+          echo "SHERLLY_RENDERER_URL=$renderer_url" >> "$GITHUB_ENV"
+          echo "Desktop renderer URL: $renderer_url"
+
       - name: Write desktop renderer config
         if: steps.version_change.outputs.changed == 'true'
         run: npm run renderer:config -- --require-url

@@ -21,7 +21,10 @@ function normalizeRendererUrl(value) {
       throw new Error("renderer url must use http or https");
     }
 
-    return parsedUrl.toString().replace(/\/$/, "");
+    const normalizedUrl = parsedUrl.toString();
+    const isOriginOnly = parsedUrl.pathname === "/" && !parsedUrl.search && !parsedUrl.hash;
+
+    return isOriginOnly ? normalizedUrl.replace(/\/$/, "") : normalizedUrl;
   } catch (error) {
     throw new Error(`Invalid SHERLLY_RENDERER_URL: ${error.message}`);
   }
@@ -32,7 +35,14 @@ const productionRendererUrl = normalizeRendererUrl(
 );
 
 if (requireRendererUrl && !productionRendererUrl) {
-  console.error("SHERLLY_RENDERER_URL is required for desktop release builds.");
+  console.error(
+    [
+      "SHERLLY_RENDERER_URL is required for desktop release builds.",
+      "Set it in GitHub repository Settings > Secrets and variables > Actions > Variables.",
+      "Name: SHERLLY_RENDERER_URL",
+      "Value: https://your-frontend-domain",
+    ].join("\n"),
+  );
   process.exit(1);
 }
 
