@@ -7,6 +7,8 @@ on:
       - master
     paths:
       - package.json
+      - package-lock.json
+      - .github/workflows/release-desktop.yml
   workflow_dispatch:
 
 permissions:
@@ -73,6 +75,15 @@ jobs:
           echo "Current package version: $current"
 
           if [ "$previous" = "$current" ]; then
+            tag="${{ steps.package_version.outputs.tag }}"
+            git fetch --tags
+
+            if ! git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+              echo "changed=true" >> "$GITHUB_OUTPUT"
+              echo "reason=package version unchanged, but release tag $tag is missing" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+
             echo "changed=false" >> "$GITHUB_OUTPUT"
             echo "reason=package version unchanged" >> "$GITHUB_OUTPUT"
             echo "package.json changed, but version stayed at $current. Release skipped." >> "$GITHUB_STEP_SUMMARY"
@@ -98,6 +109,10 @@ jobs:
           fi
 
           echo "exists=$([ -n "$tag_commit" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
+      - name: Sync package lock
+        if: steps.version_change.outputs.changed == 'true'
+        run: npm install --package-lock-only --ignore-scripts
 
       - name: Install dependencies
         if: steps.version_change.outputs.changed == 'true'

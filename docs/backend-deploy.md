@@ -149,12 +149,12 @@ npm run pack:win
 
 ```bash
 npm version patch --no-git-tag-version
-git add package.json package-lock.json
+git add package.json
 git commit -m "chore: release 0.1.1"
 git push
 ```
 
-GitHub Actions 会读取 `package.json` 里的版本号，自动创建或复用 `v版本号` tag，安装依赖、写入桌面端远程页面配置、运行目标检查、构建前端和 Windows 安装包，然后上传到对应 GitHub Release。如果只是改了 `package.json` 但版本号没变，发布会被跳过。
+GitHub Actions 会读取 `package.json` 里的版本号，先在 runner 里临时同步 `package-lock.json`，再自动创建或复用 `v版本号` tag，安装依赖、写入桌面端远程页面配置、运行目标检查、构建前端和 Windows 安装包，然后上传到对应 GitHub Release。如果版本号没变且对应 tag 已存在，发布会被跳过；如果上一次发包失败导致 tag 不存在，推送 lockfile 或 workflow 修复后会补发当前版本。
 
 ## API 检查
 
