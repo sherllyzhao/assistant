@@ -7,8 +7,6 @@ on:
       - master
     paths:
       - index.html
-      - package.json
-      - package-lock.json
       - src/**
       - vite.config.js
       - .github/workflows/deploy-frontend.yml
