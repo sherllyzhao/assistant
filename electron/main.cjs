@@ -10,6 +10,7 @@ const {
   nativeImage,
   shell,
 } = require("electron");
+const { autoUpdater } = require("electron-updater");
 const childProcess = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
@@ -28,6 +29,13 @@ let trayImages = null;
 let trayFlashTimer = null;
 let trayFlashTick = 0;
 let trayFlashActive = false;
+let updateStatus = {
+  state: "idle",
+  message: "",
+};
+let updateCheckPromise = null;
+let updateDownloadPromise = null;
+let pendingInstallAfterDownload = false;
 
 const defaultData = {
   tasks: [],
@@ -186,6 +194,209 @@ function sendQuickCaptureSignal() {
   }
 
   sendSignal();
+}
+
+function sanitizeUpdateInfo(info = {}) {
+  return {
+    version: String(info.version || ""),
+    releaseName: String(info.releaseName || ""),
+    releaseDate: String(info.releaseDate || ""),
+    releaseNotes: typeof info.releaseNotes === "string" ? info.releaseNotes : "",
+  };
+}
+
+function getUpdateStatusSnapshot(extra = {}) {
+  const latestVersion = extra.latestVersion || updateStatus.latestVersion || updateStatus.info?.version || "";
+
+  return {
+    currentVersion: app.getVersion(),
+    isPackaged: app.isPackaged,
+    latestVersion,
+    progress: 0,
+    ...updateStatus,
+    ...extra,
+  };
+}
+
+function sendUpdateStatus(nextStatus = {}) {
+  updateStatus = {
+    ...updateStatus,
+    ...nextStatus,
+  };
+
+  const snapshot = getUpdateStatusSnapshot();
+
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send("sherlly:update-status", snapshot);
+  }
+
+  return snapshot;
+}
+
+function getUpdateUnavailableStatus() {
+  return getUpdateStatusSnapshot({
+    state: app.isPackaged ? "idle" : "unsupported",
+    message: app.isPackaged ? "" : "开发环境暂不支持自动更新",
+  });
+}
+
+function checkForUpdates() {
+  if (!app.isPackaged) {
+    return Promise.resolve(sendUpdateStatus(getUpdateUnavailableStatus()));
+  }
+
+  if (updateCheckPromise) {
+    return updateCheckPromise;
+  }
+
+  updateCheckPromise = autoUpdater
+    .checkForUpdates()
+    .then(() => getUpdateStatusSnapshot())
+    .catch((error) => {
+      console.error("Failed to check for Sherlly updates:", error);
+      return sendUpdateStatus({
+        state: "error",
+        message: error.message || "检查更新失败",
+      });
+    })
+    .finally(() => {
+      updateCheckPromise = null;
+    });
+
+  return updateCheckPromise;
+}
+
+function downloadUpdate() {
+  if (!app.isPackaged) {
+    return Promise.resolve(sendUpdateStatus(getUpdateUnavailableStatus()));
+  }
+
+  pendingInstallAfterDownload = true;
+
+  if (updateStatus.state === "downloaded") {
+    installDownloadedUpdate();
+    return Promise.resolve(getUpdateStatusSnapshot({ state: "installing", progress: 100 }));
+  }
+
+  if (updateDownloadPromise) {
+    return updateDownloadPromise;
+  }
+
+  sendUpdateStatus({
+    state: "downloading",
+    message: "正在下载更新",
+    progress: 0,
+  });
+
+  updateDownloadPromise = autoUpdater
+    .downloadUpdate()
+    .then(() => getUpdateStatusSnapshot())
+    .catch((error) => {
+      pendingInstallAfterDownload = false;
+      console.error("Failed to download Sherlly update:", error);
+      return sendUpdateStatus({
+        state: "error",
+        message: error.message || "下载更新失败",
+      });
+    })
+    .finally(() => {
+      updateDownloadPromise = null;
+    });
+
+  return updateDownloadPromise;
+}
+
+function installDownloadedUpdate() {
+  if (!app.isPackaged) {
+    return getUpdateUnavailableStatus();
+  }
+
+  sendUpdateStatus({
+    state: "installing",
+    message: "正在重启并安装更新",
+    progress: 100,
+  });
+
+  setTimeout(() => {
+    autoUpdater.quitAndInstall(true, true);
+  }, 600);
+
+  return getUpdateStatusSnapshot();
+}
+
+function setupAutoUpdates() {
+  autoUpdater.autoDownload = false;
+  autoUpdater.autoInstallOnAppQuit = false;
+
+  autoUpdater.on("checking-for-update", () => {
+    sendUpdateStatus({
+      state: "checking",
+      message: "正在检查更新",
+    });
+  });
+
+  autoUpdater.on("update-available", (info) => {
+    const normalizedInfo = sanitizeUpdateInfo(info);
+    sendUpdateStatus({
+      state: "available",
+      message: "发现新版本",
+      info: normalizedInfo,
+      latestVersion: normalizedInfo.version,
+      progress: 0,
+    });
+
+    notify({
+      title: "发现 Sherlly 新版本",
+      body: normalizedInfo.version ? `新版本 ${normalizedInfo.version} 可以安装。` : "有新版本可以安装。",
+      sound: false,
+      flash: true,
+    });
+  });
+
+  autoUpdater.on("update-not-available", (info) => {
+    const normalizedInfo = sanitizeUpdateInfo(info);
+    sendUpdateStatus({
+      state: "idle",
+      message: "",
+      info: normalizedInfo,
+      latestVersion: normalizedInfo.version,
+      progress: 0,
+    });
+  });
+
+  autoUpdater.on("download-progress", (progress) => {
+    sendUpdateStatus({
+      state: "downloading",
+      message: "正在下载更新",
+      progress: Math.max(0, Math.min(100, Math.round(progress.percent || 0))),
+      bytesPerSecond: progress.bytesPerSecond || 0,
+      transferred: progress.transferred || 0,
+      total: progress.total || 0,
+    });
+  });
+
+  autoUpdater.on("update-downloaded", (info) => {
+    const normalizedInfo = sanitizeUpdateInfo(info);
+    sendUpdateStatus({
+      state: "downloaded",
+      message: "更新已下载",
+      info: normalizedInfo,
+      latestVersion: normalizedInfo.version,
+      progress: 100,
+    });
+
+    if (pendingInstallAfterDownload) {
+      installDownloadedUpdate();
+    }
+  });
+
+  autoUpdater.on("error", (error) => {
+    pendingInstallAfterDownload = false;
+    sendUpdateStatus({
+      state: "error",
+      message: error.message || "自动更新失败",
+    });
+  });
 }
 
 function triggerQuickCapture() {
@@ -486,6 +697,8 @@ app.setAppUserModelId(APP_USER_MODEL_ID);
 Menu.setApplicationMenu(null);
 
 app.whenReady().then(() => {
+  setupAutoUpdates();
+
   ipcMain.handle("sherlly:load-data", () => readDataFile());
   ipcMain.handle("sherlly:save-data", (_event, data) => writeDataFile(data));
   ipcMain.handle("sherlly:notify", (_event, payload) => {
@@ -502,10 +715,20 @@ app.whenReady().then(() => {
   ipcMain.handle("sherlly:select-attachments", () => selectAttachments());
   ipcMain.handle("sherlly:get-attachment-preview", (_event, attachment) => getAttachmentPreview(attachment));
   ipcMain.handle("sherlly:open-attachment", (_event, filePath) => openAttachment(filePath));
+  ipcMain.handle("sherlly:get-update-status", () => getUpdateStatusSnapshot());
+  ipcMain.handle("sherlly:check-for-updates", () => checkForUpdates());
+  ipcMain.handle("sherlly:download-update", () => downloadUpdate());
+  ipcMain.handle("sherlly:install-update", () => installDownloadedUpdate());
 
   createWindow();
   createTray();
   registerShortcuts();
+
+  if (app.isPackaged) {
+    setTimeout(() => {
+      checkForUpdates().catch((error) => console.error("Failed to run scheduled Sherlly update check:", error));
+    }, 5000);
+  }
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {

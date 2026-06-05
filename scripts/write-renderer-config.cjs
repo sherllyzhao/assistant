@@ -3,6 +3,7 @@ const path = require("node:path");
 
 const appRoot = path.join(__dirname, "..");
 const configPath = path.join(appRoot, "electron", "renderer-config.json");
+const requireRendererUrl = process.argv.includes("--require-url");
 
 require("dotenv").config({ path: path.join(appRoot, ".env"), quiet: true });
 
@@ -29,6 +30,11 @@ function normalizeRendererUrl(value) {
 const productionRendererUrl = normalizeRendererUrl(
   process.env.SHERLLY_RENDERER_URL || process.env.ELECTRON_RENDERER_URL || "",
 );
+
+if (requireRendererUrl && !productionRendererUrl) {
+  console.error("SHERLLY_RENDERER_URL is required for desktop release builds.");
+  process.exit(1);
+}
 
 fs.writeFileSync(
   configPath,

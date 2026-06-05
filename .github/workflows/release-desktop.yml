@@ -120,7 +120,7 @@ jobs:
 
       - name: Write desktop renderer config
         if: steps.version_change.outputs.changed == 'true'
-        run: npm run renderer:config
+        run: npm run renderer:config -- --require-url
 
       - name: Check target files
         if: steps.version_change.outputs.changed == 'true'

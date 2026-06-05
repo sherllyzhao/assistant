@@ -1,7 +1,7 @@
 {
   "name": "sherlly-assistant",
   "productName": "Sherlly Assistant",
-  "version": "0.1.2",
+  "version": "0.1.4",
   "private": true,
   "description": "Sherlly Assistant keeps work items from WeChat and manual notes inside a visible task loop.",
   "main": "electron/main.cjs",
@@ -25,6 +25,7 @@
   "dependencies": {
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
+    "electron-updater": "^6.8.3",
     "express": "^5.2.1",
     "lucide-react": "^0.468.0",
     "mongodb": "^7.2.0",

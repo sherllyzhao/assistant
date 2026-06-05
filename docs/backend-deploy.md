@@ -135,6 +135,8 @@ npm run pack:win
 
 生成的 exe 会优先加载 `SHERLLY_RENDERER_URL`。之后只要前端页面仍部署在同一个 URL，修改页面后只需要重新部署 Web 前端，不需要重新发布 exe。远程页面不可访问时，exe 会回退到安装包内置的 `dist/index.html`。
 
+内置 `dist` 只是兜底页面；`vite.config.js` 使用 `base: "./"`，这样兜底页面通过 Electron 的 `file://` 方式加载时，JS/CSS 资源仍会走相对路径，不会因为 `/assets/...` 指向磁盘根目录而白屏。
+
 ## GitHub Releases 自动发布安装包
 
 仓库已提供 `.github/workflows/release-desktop.yml`。它会监听 `main` / `master` 分支上的 `package.json` 改动；只有 `version` 字段发生变化时，才会按这个版本自动发布安装包。
@@ -144,6 +146,8 @@ npm run pack:win
 - Repository variable `SHERLLY_RENDERER_URL`：线上前端页面地址。
 - Repository variable `VITE_SHERLLY_API_URL`：线上后台 API 地址，用作安装包内置页面的回退配置。
 - Repository secret `VITE_SHERLLY_API_TOKEN`：和后台 `SHERLLY_API_TOKEN` 一致。
+
+`SHERLLY_RENDERER_URL` 是桌面端远程页面模式的必填项。GitHub Actions 发包时会执行 `npm run renderer:config -- --require-url`，如果这个变量没配，会直接失败，避免上传一个不能实现“页面更新无需重发 exe”的安装包。
 
 发布步骤示例：
 
@@ -155,6 +159,16 @@ git push
 ```
 
 GitHub Actions 会读取 `package.json` 里的版本号，先在 runner 里临时同步 `package-lock.json`，再自动创建或复用 `v版本号` tag，安装依赖、写入桌面端远程页面配置、运行目标检查、构建前端和 Windows 安装包，然后上传到对应 GitHub Release。如果版本号没变且对应 tag 已存在，发布会被跳过；如果上一次发包失败导致 tag 不存在，推送 lockfile 或 workflow 修复后会补发当前版本。
+
+## 桌面端自动更新
+
+桌面端使用 `electron-updater` 读取 GitHub Release 中的 `latest.yml`。应用启动后会自动检查新版本；如果发现 `package.json` 版本号更高的 Release，页面顶部会提示用户。用户点击“下载并安装”后，应用会下载更新包，下载完成后自动重启并安装。
+
+自动更新需要满足：
+
+- GitHub Release 中包含 Windows 安装包、`latest.yml` 和 `.blockmap` 文件。
+- `package.json` 的 `version` 必须比用户当前安装版本更高。
+- 安装包能访问 GitHub Release 资产。私有仓库的 Release 默认不适合直接给普通用户自动更新；需要让用户具备下载权限，或改用公开 Release / 独立更新服务器。
 
 ## API 检查
 

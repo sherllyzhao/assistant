@@ -8,6 +8,19 @@ contextBridge.exposeInMainWorld("sherlly", {
   selectAttachments: () => ipcRenderer.invoke("sherlly:select-attachments"),
   getAttachmentPreview: (attachment) => ipcRenderer.invoke("sherlly:get-attachment-preview", attachment),
   openAttachment: (filePath) => ipcRenderer.invoke("sherlly:open-attachment", filePath),
+  getUpdateStatus: () => ipcRenderer.invoke("sherlly:get-update-status"),
+  checkForUpdates: () => ipcRenderer.invoke("sherlly:check-for-updates"),
+  downloadUpdate: () => ipcRenderer.invoke("sherlly:download-update"),
+  installUpdate: () => ipcRenderer.invoke("sherlly:install-update"),
+  onUpdateStatus: (callback) => {
+    if (typeof callback !== "function") {
+      return () => {};
+    }
+
+    const listener = (_event, status) => callback(status);
+    ipcRenderer.on("sherlly:update-status", listener);
+    return () => ipcRenderer.removeListener("sherlly:update-status", listener);
+  },
   onQuickCapture: (callback) => {
     if (typeof callback !== "function") {
       return () => {};

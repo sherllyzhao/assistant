@@ -196,6 +196,81 @@ button:disabled {
   line-height: 1.5;
 }
 
+.update-banner {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  margin: -4px 0 16px;
+  padding: 13px 14px;
+  color: var(--accent-strong);
+  background:
+    linear-gradient(135deg, rgba(220, 238, 232, 0.94), rgba(255, 255, 255, 0.94)),
+    var(--surface);
+  border: 1px solid rgba(18, 113, 95, 0.24);
+  border-left: 5px solid var(--accent);
+  border-radius: 8px;
+  box-shadow: 0 12px 28px rgba(25, 45, 38, 0.08);
+}
+
+.update-banner.is-error {
+  color: var(--danger);
+  background: var(--danger-soft);
+  border-color: rgba(201, 71, 56, 0.24);
+  border-left-color: var(--danger);
+}
+
+.update-banner-icon {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid currentColor;
+  border-radius: 8px;
+}
+
+.update-banner-content {
+  min-width: 0;
+}
+
+.update-banner-content strong {
+  display: block;
+  color: var(--ink);
+  font-size: 15px;
+}
+
+.update-banner-content p {
+  margin: 4px 0 0;
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.update-banner-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.update-progress {
+  height: 7px;
+  margin-top: 9px;
+  overflow: hidden;
+  background: rgba(18, 113, 95, 0.14);
+  border-radius: 999px;
+}
+
+.update-progress span {
+  display: block;
+  height: 100%;
+  min-width: 8px;
+  background: var(--accent);
+  border-radius: inherit;
+  transition: width 180ms ease;
+}
+
 .reminder-alerts {
   display: grid;
   gap: 10px;
@@ -1706,6 +1781,23 @@ textarea:focus {
 
   .topbar-actions .icon-button,
   .topbar-actions .primary-button {
+    width: 100%;
+  }
+
+  .update-banner {
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: start;
+  }
+
+  .update-banner-actions {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    width: 100%;
+  }
+
+  .update-banner-actions .primary-button,
+  .update-banner-actions .secondary-button {
     width: 100%;
   }
 

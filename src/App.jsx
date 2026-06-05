@@ -5,6 +5,7 @@ import {
   CheckCircle2,
   ClipboardList,
   Clock3,
+  Download,
   Eye,
   FileText,
   Filter,
@@ -18,6 +19,7 @@ import {
   MessageSquareText,
   Paperclip,
   Plus,
+  RefreshCw,
   Save,
   Search,
   Trash2,
@@ -104,6 +106,7 @@ const viewOptions = [
 ];
 
 const cloudSyncEnabled = Boolean(import.meta.env.VITE_SHERLLY_API_URL);
+const visibleUpdateStates = new Set(["available", "downloading", "downloaded", "installing", "error"]);
 const imageMimeExtensions = {
   "image/apng": "apng",
   "image/avif": "avif",
@@ -123,6 +126,35 @@ function withCurrentOption(options, value) {
   }
 
   return [...options, { value: cleanValue, label: `${cleanValue}（旧值）` }];
+}
+
+function normalizeUpdateStatus(status = {}) {
+  const progress = Number.parseInt(status.progress || 0, 10);
+
+  return {
+    state: status.state || "idle",
+    message: status.message || "",
+    currentVersion: status.currentVersion || "",
+    latestVersion: status.latestVersion || status.info?.version || "",
+    progress: Number.isFinite(progress) ? Math.max(0, Math.min(100, progress)) : 0,
+    isPackaged: Boolean(status.isPackaged),
+  };
+}
+
+function getUpdateDismissKey(status) {
+  return [status.state, status.latestVersion, status.message].filter(Boolean).join(":");
+}
+
+function shouldShowUpdateStatus(status, dismissedKey) {
+  if (!visibleUpdateStates.has(status.state)) {
+    return false;
+  }
+
+  if (["downloading", "downloaded", "installing"].includes(status.state)) {
+    return true;
+  }
+
+  return getUpdateDismissKey(status) !== dismissedKey;
 }
 
 function App() {
@@ -148,6 +180,9 @@ function App() {
   const [detailTaskId, setDetailTaskId] = useState("");
   const [isLoaded, setIsLoaded] = useState(false);
   const [isDraggingText, setIsDraggingText] = useState(false);
+  const [updateStatus, setUpdateStatus] = useState(() => normalizeUpdateStatus());
+  const [dismissedUpdateKey, setDismissedUpdateKey] = useState("");
+  const [isUpdateActionPending, setIsUpdateActionPending] = useState(false);
   const saveTimerRef = useRef(0);
   const titleInputRef = useRef(null);
 
@@ -372,6 +407,28 @@ function App() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [attachmentPreview, detailTaskId]);
 
+  useEffect(() => {
+    if (!window.sherlly?.onUpdateStatus) {
+      return undefined;
+    }
+
+    let isCancelled = false;
+    const applyUpdateStatus = (status) => {
+      if (!isCancelled) {
+        setUpdateStatus(normalizeUpdateStatus(status));
+      }
+    };
+
+    window.sherlly.getUpdateStatus?.().then(applyUpdateStatus).catch((error) => console.error(error));
+    const unsubscribe = window.sherlly.onUpdateStatus(applyUpdateStatus);
+    window.sherlly.checkForUpdates?.().catch((error) => console.error(error));
+
+    return () => {
+      isCancelled = true;
+      unsubscribe?.();
+    };
+  }, []);
+
   const taskStats = useMemo(() => {
     const activeTasks = data.tasks.filter((task) => !["done", "cancelled"].includes(task.status));
     const now = new Date();
@@ -460,6 +517,59 @@ function App() {
 
   function dismissReminderAlert(alertId) {
     setReminderAlerts((current) => current.filter((alert) => alert.id !== alertId));
+  }
+
+  function dismissUpdateBanner() {
+    setDismissedUpdateKey(getUpdateDismissKey(updateStatus));
+  }
+
+  async function retryUpdateCheck() {
+    if (!window.sherlly?.checkForUpdates) {
+      return;
+    }
+
+    setIsUpdateActionPending(true);
+
+    try {
+      setUpdateStatus((current) => ({
+        ...current,
+        state: "checking",
+        message: "正在检查更新",
+      }));
+      await window.sherlly.checkForUpdates();
+      setDismissedUpdateKey("");
+    } catch (error) {
+      console.error(error);
+      setUpdateStatus((current) => ({
+        ...current,
+        state: "error",
+        message: error.message || "检查更新失败",
+      }));
+    } finally {
+      setIsUpdateActionPending(false);
+    }
+  }
+
+  async function downloadAndInstallUpdate() {
+    if (!window.sherlly?.downloadUpdate) {
+      return;
+    }
+
+    setIsUpdateActionPending(true);
+
+    try {
+      await window.sherlly.downloadUpdate();
+      setDismissedUpdateKey("");
+    } catch (error) {
+      console.error(error);
+      setUpdateStatus((current) => ({
+        ...current,
+        state: "error",
+        message: error.message || "下载更新失败",
+      }));
+    } finally {
+      setIsUpdateActionPending(false);
+    }
   }
 
   function notifyWithFallback(payload) {
@@ -1219,6 +1329,16 @@ function App() {
         </section>
       ) : null}
 
+      {shouldShowUpdateStatus(updateStatus, dismissedUpdateKey) ? (
+        <UpdateBanner
+          isBusy={isUpdateActionPending}
+          onDismiss={dismissUpdateBanner}
+          onDownload={downloadAndInstallUpdate}
+          onRetry={retryUpdateCheck}
+          status={updateStatus}
+        />
+      ) : null}
+
       {reminderAlerts.length > 0 ? (
         <section className="reminder-alerts" aria-label="提醒消息" aria-live="polite" role="status">
           {reminderAlerts.map((alert) => (
@@ -1805,6 +1925,68 @@ function AuthScreen({ draft, error, isSubmitting, mode, onModeChange, onSubmit, 
         </form>
       </section>
     </main>
+  );
+}
+
+function UpdateBanner({ isBusy, onDismiss, onDownload, onRetry, status }) {
+  const latestVersion = status.latestVersion ? ` ${status.latestVersion}` : "";
+  const isDownloading = status.state === "downloading";
+  const isInstalling = status.state === "installing";
+  const isError = status.state === "error";
+  const isDownloaded = status.state === "downloaded";
+  const canDismiss = !isDownloading && !isInstalling;
+  const title = isError
+    ? "自动更新检查失败"
+    : isInstalling
+      ? "正在安装更新"
+      : isDownloading
+        ? "正在下载更新"
+        : isDownloaded
+          ? "更新已下载"
+          : `发现新版本${latestVersion}`;
+  const description = isError
+    ? status.message || "暂时无法获取更新信息。"
+    : isInstalling
+      ? "应用会自动重启并完成安装。"
+      : isDownloading
+        ? `下载进度 ${status.progress}%`
+        : isDownloaded
+          ? "应用即将重启并安装更新。"
+          : `当前版本 ${status.currentVersion || "未知"}，点击后会下载并自动安装。`;
+
+  return (
+    <section className={`update-banner ${isError ? "is-error" : ""}`} role="status" aria-live="polite">
+      <div className="update-banner-icon">
+        {isError ? <RefreshCw size={18} /> : <Download size={18} />}
+      </div>
+      <div className="update-banner-content">
+        <strong>{title}</strong>
+        <p>{description}</p>
+        {isDownloading || isInstalling ? (
+          <div className="update-progress" aria-label={`更新下载进度 ${status.progress}%`}>
+            <span style={{ width: `${status.progress}%` }} />
+          </div>
+        ) : null}
+      </div>
+      <div className="update-banner-actions">
+        {isError ? (
+          <button className="secondary-button" type="button" onClick={onRetry} disabled={isBusy}>
+            <RefreshCw size={16} />
+            重试
+          </button>
+        ) : status.state === "available" ? (
+          <button className="primary-button" type="button" onClick={onDownload} disabled={isBusy}>
+            <Download size={16} />
+            {isBusy ? "准备中" : "下载并安装"}
+          </button>
+        ) : null}
+        {canDismiss ? (
+          <button className="icon-button" type="button" onClick={onDismiss} title="关闭更新提示">
+            <X size={16} />
+          </button>
+        ) : null}
+      </div>
+    </section>
   );
 }
 
