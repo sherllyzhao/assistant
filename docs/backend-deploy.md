@@ -155,6 +155,8 @@ https://sherllyzhao.github.io/--/
 
 `SHERLLY_RENDERER_URL` 是桌面端远程页面地址。如果这个变量没配，GitHub Actions 会自动使用当前仓库的 GitHub Pages 地址：`https://sherllyzhao.github.io/--/`。如果你以后换到 Cloudflare Pages / Vercel / 自定义域名，再把 `SHERLLY_RENDERER_URL` 改成新地址即可。
 
+`VITE_SHERLLY_API_URL` 和 `VITE_SHERLLY_API_TOKEN` 决定前端是否启用云同步。GitHub Actions 会在前端部署和安装包构建前检查这两个值；缺少时会直接失败，避免发出只能使用空本地数据的页面或安装包。
+
 发布步骤示例：
 
 ```bash
@@ -170,11 +172,13 @@ GitHub Actions 会读取 `package.json` 里的版本号，先在 runner 里临�
 
 桌面端使用 `electron-updater` 读取 GitHub Release 中的 `latest.yml`。应用启动后会自动检查新版本；如果发现 `package.json` 版本号更高的 Release，页面顶部会提示用户。用户点击“下载并安装”后，应用会下载更新包，下载完成后自动重启并安装。
 
+安装包的更新源在 `package.json` 里固定为 GitHub 仓库 `sherllyzhao/--`，避免 `electron-builder` 根据 CI 环境或仓库名猜错到其他仓库。
+
 自动更新需要满足：
 
 - GitHub Release 中包含 Windows 安装包、`latest.yml` 和 `.blockmap` 文件。
 - `package.json` 的 `version` 必须比用户当前安装版本更高。
-- 安装包能访问 GitHub Release 资产。私有仓库的 Release 默认不适合直接给普通用户自动更新；需要让用户具备下载权限，或改用公开 Release / 独立更新服务器。
+- 安装包能访问 GitHub Release 资产。私有仓库的 Release 默认不适合直接给普通用户自动更新；普通用户没有 GitHub 权限时会看到 404。要么把 Release 放在公开仓库，要么改用独立更新服务器。
 
 ## API 检查
 

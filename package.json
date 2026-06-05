@@ -1,9 +1,13 @@
 {
   "name": "sherlly-assistant",
   "productName": "Sherlly Assistant",
-  "version": "0.1.4",
+  "version": "0.1.6",
   "private": true,
   "description": "Sherlly Assistant keeps work items from WeChat and manual notes inside a visible task loop.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sherllyzhao/--.git"
+  },
   "main": "electron/main.cjs",
   "type": "module",
   "scripts": {
@@ -72,6 +76,8 @@
     "publish": [
       {
         "provider": "github",
+        "owner": "sherllyzhao",
+        "repo": "--",
         "releaseType": "release"
       }
     ]

@@ -17,6 +17,7 @@ const path = require("node:path");
 
 const APP_NAME = "Sherlly Assistant";
 const APP_USER_MODEL_ID = "com.sherlly.assistant";
+const UPDATE_REPOSITORY = "sherllyzhao/--";
 const DATA_FILE_NAME = "sherlly-data.json";
 const RENDERER_CONFIG_FILE_NAME = "renderer-config.json";
 const QUICK_CAPTURE_SHORTCUT = "CommandOrControl+Alt+S";
@@ -50,6 +51,28 @@ function getDataPath() {
   return path.join(app.getPath("userData"), DATA_FILE_NAME);
 }
 
+function getDataPaths() {
+  const appDataPath = app.getPath("appData");
+  const candidatePaths = [
+    getDataPath(),
+    path.join(appDataPath, APP_NAME, DATA_FILE_NAME),
+    path.join(appDataPath, "sherlly-assistant", DATA_FILE_NAME),
+    path.join(appDataPath, "Electron", DATA_FILE_NAME),
+  ];
+  const seenPaths = new Set();
+
+  return candidatePaths.filter((filePath) => {
+    const key = path.resolve(filePath).toLowerCase();
+
+    if (seenPaths.has(key)) {
+      return false;
+    }
+
+    seenPaths.add(key);
+    return true;
+  });
+}
+
 function normalizeData(data) {
   return {
     tasks: Array.isArray(data?.tasks) ? data.tasks : [],
@@ -62,20 +85,87 @@ function normalizeData(data) {
   };
 }
 
-function readDataFile() {
-  const filePath = getDataPath();
+function hasMeaningfulData(data) {
+  return data.tasks.length > 0 || data.candidates.length > 0 || data.logs.length > 0;
+}
 
+function getItemTimestamp(item) {
+  return new Date(item?.updatedAt || item?.createdAt || item?.detectedAt || 0).getTime();
+}
+
+function mergeItems(currentItems, nextItems) {
+  const itemsById = new Map();
+
+  for (const item of currentItems) {
+    if (item?.id) {
+      itemsById.set(item.id, item);
+    }
+  }
+
+  for (const item of nextItems) {
+    if (!item?.id) {
+      continue;
+    }
+
+    const existing = itemsById.get(item.id);
+
+    if (!existing || getItemTimestamp(item) >= getItemTimestamp(existing)) {
+      itemsById.set(item.id, item);
+    }
+  }
+
+  return [...itemsById.values()];
+}
+
+function mergeData(currentData, nextData) {
+  const current = normalizeData(currentData);
+  const next = normalizeData(nextData);
+
+  return {
+    tasks: mergeItems(current.tasks, next.tasks),
+    candidates: mergeItems(current.candidates, next.candidates),
+    logs: mergeItems(current.logs, next.logs),
+    settings: {
+      ...current.settings,
+      ...next.settings,
+    },
+  };
+}
+
+function readDataPath(filePath) {
   if (!fs.existsSync(filePath)) {
-    return defaultData;
+    return null;
   }
 
   try {
     const raw = fs.readFileSync(filePath, "utf8");
     return normalizeData(JSON.parse(raw));
   } catch (error) {
-    console.error("Failed to read Sherlly data file:", error);
-    return defaultData;
+    console.error(`Failed to read Sherlly data file at ${filePath}:`, error);
+    return null;
   }
+}
+
+function readDataFile() {
+  let mergedData = defaultData;
+  let foundData = false;
+
+  for (const filePath of getDataPaths()) {
+    const data = readDataPath(filePath);
+
+    if (!data) {
+      continue;
+    }
+
+    foundData = true;
+    mergedData = mergeData(mergedData, data);
+  }
+
+  if (foundData && hasMeaningfulData(mergedData) && !hasMeaningfulData(readDataPath(getDataPath()) || defaultData)) {
+    writeDataFile(mergedData);
+  }
+
+  return foundData ? mergedData : defaultData;
 }
 
 function writeDataFile(data) {
@@ -243,6 +333,20 @@ function getUpdateUnavailableStatus() {
   });
 }
 
+function getUpdateErrorMessage(error, fallbackMessage) {
+  const message = String(error?.message || error || "");
+
+  if (/404|not found|releases\.atom|github\.com/i.test(message)) {
+    return `无法访问 GitHub Release 更新源（${UPDATE_REPOSITORY}）。请确认仓库 Release 对用户可访问，或先手动下载安装包。`;
+  }
+
+  if (/authentication token|unauthorized|forbidden|401|403/i.test(message)) {
+    return "GitHub Release 更新源需要权限，当前安装包无法自动获取更新。";
+  }
+
+  return fallbackMessage;
+}
+
 function checkForUpdates() {
   if (!app.isPackaged) {
     return Promise.resolve(sendUpdateStatus(getUpdateUnavailableStatus()));
@@ -259,7 +363,7 @@ function checkForUpdates() {
       console.error("Failed to check for Sherlly updates:", error);
       return sendUpdateStatus({
         state: "error",
-        message: error.message || "检查更新失败",
+        message: getUpdateErrorMessage(error, "检查更新失败"),
       });
     })
     .finally(() => {
@@ -299,7 +403,7 @@ function downloadUpdate() {
       console.error("Failed to download Sherlly update:", error);
       return sendUpdateStatus({
         state: "error",
-        message: error.message || "下载更新失败",
+        message: getUpdateErrorMessage(error, "下载更新失败"),
       });
     })
     .finally(() => {
@@ -397,7 +501,7 @@ function setupAutoUpdates() {
     pendingInstallAfterDownload = false;
     sendUpdateStatus({
       state: "error",
-      message: error.message || "自动更新失败",
+      message: getUpdateErrorMessage(error, "自动更新失败"),
     });
   });
 }

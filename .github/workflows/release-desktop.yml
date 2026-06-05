@@ -118,6 +118,20 @@ jobs:
         if: steps.version_change.outputs.changed == 'true'
         run: npm ci
 
+      - name: Check cloud sync config
+        if: steps.version_change.outputs.changed == 'true'
+        shell: bash
+        run: |
+          if [ -z "${VITE_SHERLLY_API_URL:-}" ]; then
+            echo "::error::Missing repository variable VITE_SHERLLY_API_URL. The packaged renderer would run in local-only mode and show empty data."
+            exit 1
+          fi
+
+          if [ -z "${VITE_SHERLLY_API_TOKEN:-}" ]; then
+            echo "::error::Missing repository secret VITE_SHERLLY_API_TOKEN. Cloud login and data sync would fail."
+            exit 1
+          fi
+
       - name: Resolve desktop renderer URL
         if: steps.version_change.outputs.changed == 'true'
         shell: bash
