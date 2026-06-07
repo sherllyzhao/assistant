@@ -46,6 +46,7 @@ import {
   getReminderLeadMinutes,
   getStatusMeta,
   getTaskReminderAt,
+  isActiveTask,
   isOverdue,
   launchActionTypes,
   logRanges,
@@ -90,6 +91,7 @@ const filterOptions = [
 const sourceOptions = [
   { value: "手动录入", label: "手动录入" },
   { value: "快捷键速记", label: "快捷键速记" },
+  { value: "手机速记", label: "手机速记" },
   { value: "微信粘贴", label: "微信粘贴" },
   { value: "拖拽文本", label: "拖拽文本" },
 ];
@@ -158,6 +160,94 @@ function shouldShowUpdateStatus(status, dismissedKey) {
   return getUpdateDismissKey(status) !== dismissedKey;
 }
 
+function getPrioritySortValue(priority) {
+  return { high: 0, normal: 1, low: 2 }[priority] ?? 1;
+}
+
+function getDueTime(task) {
+  const dueTime = task?.dueAt ? new Date(task.dueAt).getTime() : Number.MAX_SAFE_INTEGER;
+  return Number.isFinite(dueTime) ? dueTime : Number.MAX_SAFE_INTEGER;
+}
+
+function sortTasksByFocus(left, right) {
+  return getPrioritySortValue(left.priority) - getPrioritySortValue(right.priority) || getDueTime(left) - getDueTime(right);
+}
+
+function getEndOfLocalDay(value = new Date()) {
+  const date = new Date(value);
+  date.setHours(23, 59, 59, 999);
+  return date;
+}
+
+function getMobileFocusTasks(tasks, now = new Date()) {
+  const dayEndTime = getEndOfLocalDay(now).getTime();
+
+  return tasks
+    .filter((task) => isActiveTask(task))
+    .filter((task) => {
+      const dueTime = getDueTime(task);
+      const dailyProgress = getDailyProgress(task, now);
+
+      return dueTime <= dayEndTime || task.priority === "high" || dailyProgress.isScheduled;
+    })
+    .sort(sortTasksByFocus)
+    .slice(0, 8);
+}
+
+function escapeIcsText(value) {
+  return String(value || "")
+    .replace(/\\/g, "\\\\")
+    .replace(/\r?\n/g, "\\n")
+    .replace(/,/g, "\\,")
+    .replace(/;/g, "\\;");
+}
+
+function formatIcsDate(value) {
+  return new Date(value).toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
+}
+
+function createTaskCalendarText(task) {
+  const start = new Date(task.dueAt);
+  const end = new Date(start.getTime() + 30 * 60 * 1000);
+  const reminderMinutes = getReminderLeadMinutes(task);
+  const uid = `${task.id || Date.now()}@sherlly-assistant`;
+  const description = [task.note, task.owner ? `负责人：${task.owner}` : "", task.source ? `来源：${task.source}` : ""]
+    .filter(Boolean)
+    .join("\n");
+
+  return [
+    "BEGIN:VCALENDAR",
+    "VERSION:2.0",
+    "PRODID:-//Sherlly Assistant//Task Reminder//ZH-CN",
+    "CALSCALE:GREGORIAN",
+    "METHOD:PUBLISH",
+    "BEGIN:VEVENT",
+    `UID:${escapeIcsText(uid)}`,
+    `DTSTAMP:${formatIcsDate(new Date())}`,
+    `DTSTART:${formatIcsDate(start)}`,
+    `DTEND:${formatIcsDate(end)}`,
+    `SUMMARY:${escapeIcsText(task.title)}`,
+    `DESCRIPTION:${escapeIcsText(description || task.title)}`,
+    "BEGIN:VALARM",
+    `TRIGGER:-PT${reminderMinutes}M`,
+    "ACTION:DISPLAY",
+    `DESCRIPTION:${escapeIcsText(task.title)}`,
+    "END:VALARM",
+    "END:VEVENT",
+    "END:VCALENDAR",
+    "",
+  ].join("\r\n");
+}
+
+function getSafeFilename(value) {
+  return (
+    String(value || "sherlly-task")
+      .replace(/[\\/:*?"<>|]+/g, "-")
+      .replace(/\s+/g, "-")
+      .slice(0, 48) || "sherlly-task"
+  );
+}
+
 function taskToDraft(task) {
   const tags = Array.isArray(task.tags) ? task.tags : [];
 
@@ -214,8 +304,12 @@ function App() {
   const [updateStatus, setUpdateStatus] = useState(() => normalizeUpdateStatus());
   const [dismissedUpdateKey, setDismissedUpdateKey] = useState("");
   const [isUpdateActionPending, setIsUpdateActionPending] = useState(false);
+  const [mobileQuickText, setMobileQuickText] = useState("");
+  const [mobileCaptureStatus, setMobileCaptureStatus] = useState("");
+  const [isVoiceListening, setIsVoiceListening] = useState(false);
   const saveTimerRef = useRef(0);
   const titleInputRef = useRef(null);
+  const speechRecognitionRef = useRef(null);
 
   useEffect(() => {
     let isCancelled = false;
@@ -460,6 +554,12 @@ function App() {
     };
   }, []);
 
+  useEffect(() => {
+    return () => {
+      speechRecognitionRef.current?.abort?.();
+    };
+  }, []);
+
   const taskStats = useMemo(() => {
     const activeTasks = data.tasks.filter((task) => !["done", "cancelled"].includes(task.status));
     const now = new Date();
@@ -517,6 +617,7 @@ function App() {
     () => createDailyReport(data.tasks, data.logs, logRange),
     [data.tasks, data.logs, logRange],
   );
+  const mobileFocusTasks = useMemo(() => getMobileFocusTasks(data.tasks), [data.tasks]);
   const detailTask = useMemo(
     () => data.tasks.find((task) => task.id === detailTaskId) || null,
     [data.tasks, detailTaskId],
@@ -606,6 +707,124 @@ function App() {
   function notifyWithFallback(payload) {
     pushReminderAlert(payload);
     sendNotification(payload).catch((error) => console.error(error));
+  }
+
+  function downloadTaskCalendar(task) {
+    const dueTime = task?.dueAt ? new Date(task.dueAt).getTime() : Number.NaN;
+
+    if (!Number.isFinite(dueTime)) {
+      setMobileCaptureStatus("这个任务还没有截止时间");
+      notifyWithFallback({
+        title: "无法添加到日历",
+        body: "请先给任务设置截止时间。",
+        sound: false,
+        flash: false,
+      });
+      return;
+    }
+
+    const blob = new Blob([createTaskCalendarText(task)], { type: "text/calendar;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+
+    link.href = url;
+    link.download = `${getSafeFilename(task.title)}.ics`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    setMobileCaptureStatus("日历文件已生成");
+  }
+
+  function createMobileQuickTask(text) {
+    const cleanText = String(text || "").trim();
+
+    if (!cleanText) {
+      setMobileCaptureStatus("先输入一条任务");
+      return;
+    }
+
+    const firstLine = cleanText
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find(Boolean);
+    const task = createTask({
+      ...emptyTaskDraft,
+      title: (firstLine || cleanText).slice(0, 60),
+      source: "手机速记",
+      note: cleanText,
+    });
+
+    setData((current) => ({
+      ...current,
+      tasks: [task, ...current.tasks],
+      logs: [...current.logs, createLog("创建任务", task, "手机速记")],
+    }));
+    setMobileQuickText("");
+    setMobileCaptureStatus(task.dueAt ? `已创建：${formatDateTime(task.dueAt)}` : "已创建任务");
+  }
+
+  function submitMobileQuickTask(event) {
+    event.preventDefault();
+    createMobileQuickTask(mobileQuickText);
+  }
+
+  function getSpeechRecognition() {
+    return window.SpeechRecognition || window.webkitSpeechRecognition;
+  }
+
+  function startMobileVoiceCapture() {
+    const SpeechRecognition = getSpeechRecognition();
+
+    if (!SpeechRecognition) {
+      setMobileCaptureStatus("当前浏览器不支持语音输入");
+      return;
+    }
+
+    if (isVoiceListening) {
+      speechRecognitionRef.current?.stop?.();
+      return;
+    }
+
+    const recognition = new SpeechRecognition();
+    speechRecognitionRef.current = recognition;
+    recognition.lang = "zh-CN";
+    recognition.continuous = false;
+    recognition.interimResults = false;
+    recognition.maxAlternatives = 1;
+    recognition.onstart = () => {
+      setIsVoiceListening(true);
+      setMobileCaptureStatus("正在听写");
+    };
+    recognition.onresult = (event) => {
+      const text = Array.from(event.results || [])
+        .map((result) => result[0]?.transcript || "")
+        .join("")
+        .trim();
+
+      if (text) {
+        setMobileQuickText((current) => (current.trim() ? `${current.trim()} ${text}` : text));
+        setMobileCaptureStatus("语音内容已填入");
+      }
+    };
+    recognition.onerror = (event) => {
+      setMobileCaptureStatus(event.error === "not-allowed" ? "需要允许麦克风权限" : "语音输入失败");
+    };
+    recognition.onend = () => {
+      setIsVoiceListening(false);
+    };
+    recognition.start();
+  }
+
+  function completeMobileTask(task) {
+    const progress = getDailyProgress(task);
+
+    if (progress.isScheduled) {
+      completeTaskOnce(task);
+      return;
+    }
+
+    changeTaskStatus(task, "done");
   }
 
   function focusTaskTitle() {
@@ -1383,6 +1602,21 @@ function App() {
         </section>
       ) : null}
 
+      <MobileHomePanel
+        captureStatus={mobileCaptureStatus}
+        isVoiceListening={isVoiceListening}
+        onAddToCalendar={downloadTaskCalendar}
+        onCompleteTask={completeMobileTask}
+        onOpenFullBoard={() => setActiveView("tasks")}
+        onQuickTextChange={setMobileQuickText}
+        onStartTask={startTask}
+        onStartVoice={startMobileVoiceCapture}
+        onSubmitQuickTask={submitMobileQuickTask}
+        onViewTask={(task) => setDetailTaskId(task.id)}
+        quickText={mobileQuickText}
+        tasks={mobileFocusTasks}
+      />
+
       <section className="metrics-grid" aria-label="任务概览">
         <Metric icon={<ListChecks size={20} />} label="未完成" value={taskStats.active} />
         <Metric icon={<Bell size={20} />} label="已逾期" value={taskStats.overdue} tone="danger" />
@@ -1783,6 +2017,7 @@ function App() {
             setDetailTaskId("");
             copyTask(task);
           }}
+          onAddToCalendar={downloadTaskCalendar}
           onPreviewAttachment={previewAttachment}
         />
       ) : null}
@@ -2040,6 +2275,150 @@ function EmptyState({ icon, text }) {
   );
 }
 
+function MobileHomePanel({
+  captureStatus,
+  isVoiceListening,
+  onAddToCalendar,
+  onCompleteTask,
+  onOpenFullBoard,
+  onQuickTextChange,
+  onStartTask,
+  onStartVoice,
+  onSubmitQuickTask,
+  onViewTask,
+  quickText,
+  tasks,
+}) {
+  const overdueCount = tasks.filter((task) => isOverdue(task)).length;
+
+  return (
+    <section className="mobile-home" aria-label="手机工作台">
+      <div className="mobile-home-heading">
+        <div>
+          <p className="eyebrow">Mobile</p>
+          <h2>今日待办</h2>
+        </div>
+        <button className="secondary-button" type="button" onClick={onOpenFullBoard}>
+          <ListChecks size={17} />
+          看板
+        </button>
+      </div>
+
+      <div className="mobile-stat-strip" aria-label="今日概览">
+        <span aria-label={`今日重点 ${tasks.length} 项`}>
+          <ListChecks size={15} />
+          {tasks.length}
+        </span>
+        <span aria-label={`逾期 ${overdueCount} 项`}>
+          <Bell size={15} />
+          {overdueCount}
+        </span>
+      </div>
+
+      <form className="mobile-capture" onSubmit={onSubmitQuickTask}>
+        <label>
+          速记
+          <textarea
+            value={quickText}
+            onChange={(event) => onQuickTextChange(event.target.value)}
+            rows={2}
+            placeholder="例如：下午问王总合同"
+          />
+        </label>
+        <div className="mobile-capture-actions">
+          <button className="secondary-button" type="button" onClick={onStartVoice}>
+            <MessageSquareText size={17} />
+            {isVoiceListening ? "停止" : "语音"}
+          </button>
+          <button className="primary-button" type="submit">
+            <Plus size={17} />
+            创建
+          </button>
+        </div>
+        {captureStatus ? <p className="mobile-capture-status">{captureStatus}</p> : null}
+      </form>
+
+      <div className="mobile-task-list">
+        {tasks.length === 0 ? (
+          <EmptyState icon={<CheckCircle2 size={23} />} text="今天没有需要盯住的任务" />
+        ) : (
+          tasks.map((task) => (
+            <MobileTaskCard
+              key={task.id}
+              task={task}
+              onAddToCalendar={onAddToCalendar}
+              onCompleteTask={onCompleteTask}
+              onStartTask={onStartTask}
+              onViewTask={onViewTask}
+            />
+          ))
+        )}
+      </div>
+    </section>
+  );
+}
+
+function MobileTaskCard({ task, onAddToCalendar, onCompleteTask, onStartTask, onViewTask }) {
+  const priority = getPriorityMeta(task.priority);
+  const status = getStatusMeta(task.status);
+  const dailyProgress = getDailyProgress(task);
+  const reminderAt = getTaskReminderAt(task);
+
+  return (
+    <article className={`mobile-task-card priority-${task.priority}`}>
+      <button className="mobile-task-summary" type="button" onClick={() => onViewTask(task)}>
+        <span>{task.title}</span>
+        <strong>{status.label}</strong>
+      </button>
+      <div className="mobile-task-meta">
+        <span>{priority.label}</span>
+        {task.dueAt ? (
+          <span>
+            <CalendarClock size={14} />
+            {formatDateTime(task.dueAt)}
+          </span>
+        ) : null}
+        {reminderAt ? (
+          <span>
+            <Bell size={14} />
+            {formatDateTime(reminderAt)}
+          </span>
+        ) : null}
+        {task.owner ? <span>{task.owner}</span> : null}
+      </div>
+      {dailyProgress.isScheduled ? (
+        <div className={`daily-progress ${dailyProgress.isReached ? "is-complete" : ""}`}>
+          <span>今日进度</span>
+          <strong>
+            {dailyProgress.done}/{dailyProgress.target}
+          </strong>
+          {dailyProgress.missed > 0 ? <em>错过 {dailyProgress.missed}</em> : null}
+        </div>
+      ) : null}
+      <div className="mobile-task-actions">
+        <button type="button" onClick={() => onStartTask(task)}>
+          开始
+        </button>
+        <button
+          type="button"
+          onClick={() => onCompleteTask(task)}
+          disabled={dailyProgress.isScheduled && dailyProgress.available === 0}
+        >
+          {dailyProgress.isScheduled ? "完成一次" : "完成"}
+        </button>
+        {task.dueAt ? (
+          <button type="button" onClick={() => onAddToCalendar(task)}>
+            日历
+          </button>
+        ) : null}
+        <button type="button" onClick={() => onViewTask(task)}>
+          详情
+        </button>
+      </div>
+    </article>
+  );
+}
+
 function ReportPanel({
   dailyReport,
   visibleLogs,
@@ -2214,7 +2593,7 @@ function ReportTaskItem({ task, onPreviewAttachment, onViewTask }) {
   );
 }
 
-function TaskDetailDialog({ task, onClose, onCopy, onEdit, onPreviewAttachment }) {
+function TaskDetailDialog({ task, onAddToCalendar, onClose, onCopy, onEdit, onPreviewAttachment }) {
   const attachments = normalizeAttachments(task.attachments);
   const priority = getPriorityMeta(task.priority);
   const status = getStatusMeta(task.status);
@@ -2342,6 +2721,12 @@ function TaskDetailDialog({ task, onClose, onCopy, onEdit, onPreviewAttachment }
         </div>
 
         <div className="task-detail-actions">
+          {task.dueAt ? (
+            <button className="secondary-button" type="button" onClick={() => onAddToCalendar(task)}>
+              <CalendarClock size={18} />
+              添加到日历
+            </button>
+          ) : null}
           <button className="secondary-button" type="button" onClick={() => onCopy(task)}>
             <Copy size={18} />
             复制任务
