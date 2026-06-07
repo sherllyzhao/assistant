@@ -68,6 +68,404 @@ export function normalizeTags(value) {
     .filter(Boolean);
 }
 
+const weekdayMap = {
+  日: 0,
+  天: 0,
+  一: 1,
+  二: 2,
+  三: 3,
+  四: 4,
+  五: 5,
+  六: 6,
+};
+const defaultSmartDueTime = { hour: 18, minute: 0 };
+
+function isValidDate(value) {
+  return value instanceof Date && Number.isFinite(value.getTime());
+}
+
+function startOfLocalDay(value) {
+  const date = new Date(value);
+  date.setHours(0, 0, 0, 0);
+  return date;
+}
+
+function addLocalDays(value, days) {
+  const date = new Date(value);
+  date.setDate(date.getDate() + days);
+  return date;
+}
+
+function setLocalTime(value, hour = defaultSmartDueTime.hour, minute = defaultSmartDueTime.minute) {
+  const date = new Date(value);
+  date.setHours(hour, minute, 0, 0);
+  return date;
+}
+
+function getLocalWeekStart(value) {
+  const start = startOfLocalDay(value);
+  const day = start.getDay() || 7;
+  start.setDate(start.getDate() - day + 1);
+  return start;
+}
+
+function normalizeClockHour(hour, meridiem) {
+  if (/下午|晚上|今晚/.test(meridiem) && hour < 12) {
+    return hour + 12;
+  }
+
+  if (/中午/.test(meridiem) && hour < 11) {
+    return hour + 12;
+  }
+
+  if (/凌晨|早上|上午/.test(meridiem) && hour === 12) {
+    return 0;
+  }
+
+  return hour;
+}
+
+function parseClockFromText(text) {
+  const clockText = String(text || "");
+  const colonMatch = clockText.match(/(凌晨|早上|上午|中午|下午|晚上|今晚)?\s*(\d{1,2})[:：](\d{2})/);
+
+  if (colonMatch) {
+    const hour = normalizeClockHour(Number.parseInt(colonMatch[2], 10), colonMatch[1] || "");
+    const minute = Number.parseInt(colonMatch[3], 10);
+
+    if (hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59) {
+      return { hour, minute };
+    }
+  }
+
+  const pointMatch = clockText.match(
+    /(凌晨|早上|上午|中午|下午|晚上|今晚)?\s*(\d{1,2})点(?:(半)|(\d{1,2})分?)?/,
+  );
+
+  if (pointMatch) {
+    const hour = normalizeClockHour(Number.parseInt(pointMatch[2], 10), pointMatch[1] || "");
+    const minute = pointMatch[3] ? 30 : Number.parseInt(pointMatch[4] || "0", 10);
+
+    if (hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59) {
+      return { hour, minute };
+    }
+  }
+
+  return null;
+}
+
+function getTextTimeHint(text) {
+  const clock = parseClockFromText(text);
+
+  if (clock) {
+    return clock;
+  }
+
+  if (/凌晨/.test(text)) {
+    return { hour: 8, minute: 0 };
+  }
+
+  if (/早上|上午/.test(text)) {
+    return { hour: 12, minute: 0 };
+  }
+
+  if (/中午/.test(text)) {
+    return { hour: 14, minute: 0 };
+  }
+
+  if (/下午|下班前/.test(text)) {
+    return { hour: 18, minute: 0 };
+  }
+
+  if (/晚上|今晚/.test(text)) {
+    return { hour: 22, minute: 0 };
+  }
+
+  return defaultSmartDueTime;
+}
+
+function applyTextTime(value, text) {
+  const time = getTextTimeHint(text);
+  return setLocalTime(value, time.hour, time.minute);
+}
+
+function parseMonthDateDueAt(text, now) {
+  const monthDateMatch = String(text || "").match(/(?:(\d{4})年)?(\d{1,2})月(\d{1,2})[日号]?/);
+
+  if (!monthDateMatch) {
+    return null;
+  }
+
+  const hasYear = Boolean(monthDateMatch[1]);
+  const year = Number.parseInt(monthDateMatch[1] || String(now.getFullYear()), 10);
+  const month = Number.parseInt(monthDateMatch[2], 10);
+  const day = Number.parseInt(monthDateMatch[3], 10);
+
+  if (month < 1 || month > 12 || day < 1 || day > 31) {
+    return null;
+  }
+
+  let dueAt = applyTextTime(new Date(year, month - 1, day), text);
+
+  if (dueAt.getMonth() !== month - 1) {
+    return null;
+  }
+
+  if (!hasYear && startOfLocalDay(dueAt).getTime() < startOfLocalDay(now).getTime()) {
+    dueAt = applyTextTime(new Date(year + 1, month - 1, day), text);
+  }
+
+  return dueAt;
+}
+
+function parseNumericDateDueAt(text, now) {
+  const numericMatch = String(text || "").match(/(?:(\d{4})[-/.])?(\d{1,2})[-/.](\d{1,2})/);
+
+  if (!numericMatch) {
+    return null;
+  }
+
+  const hasYear = Boolean(numericMatch[1]);
+  const year = Number.parseInt(numericMatch[1] || String(now.getFullYear()), 10);
+  const month = Number.parseInt(numericMatch[2], 10);
+  const day = Number.parseInt(numericMatch[3], 10);
+
+  if (month < 1 || month > 12 || day < 1 || day > 31) {
+    return null;
+  }
+
+  let dueAt = applyTextTime(new Date(year, month - 1, day), text);
+
+  if (dueAt.getMonth() !== month - 1) {
+    return null;
+  }
+
+  if (!hasYear && startOfLocalDay(dueAt).getTime() < startOfLocalDay(now).getTime()) {
+    dueAt = applyTextTime(new Date(year + 1, month - 1, day), text);
+  }
+
+  return dueAt;
+}
+
+function parseWeekdayDueAt(text, now) {
+  const weekMatch = String(text || "").match(
+    /(下周|下星期|下礼拜|本周|这周|本星期|这星期|本礼拜|这礼拜)?(?:周|星期|礼拜)([一二三四五六日天])/,
+  );
+
+  if (!weekMatch) {
+    return null;
+  }
+
+  const prefix = weekMatch[1] || "";
+  const targetDay = weekdayMap[weekMatch[2]];
+  const weekOffset = /^下/.test(prefix) ? 1 : 0;
+  const weekStart = getLocalWeekStart(now);
+  const normalizedTargetDay = targetDay === 0 ? 7 : targetDay;
+  let dueAt = applyTextTime(addLocalDays(weekStart, normalizedTargetDay - 1 + weekOffset * 7), text);
+
+  if (!prefix && dueAt.getTime() < now.getTime()) {
+    dueAt = addLocalDays(dueAt, 7);
+  }
+
+  return dueAt;
+}
+
+function parseWeekRangeDueAt(text, now) {
+  if (/周末/.test(text)) {
+    const weekStart = getLocalWeekStart(now);
+    return applyTextTime(addLocalDays(weekStart, 6), text);
+  }
+
+  if (/下周|下星期|下礼拜/.test(text)) {
+    const weekStart = getLocalWeekStart(now);
+    return applyTextTime(addLocalDays(weekStart, 13), text);
+  }
+
+  if (/本周|这周|周内|本星期|这星期|本礼拜|这礼拜/.test(text)) {
+    const weekStart = getLocalWeekStart(now);
+    return applyTextTime(addLocalDays(weekStart, 6), text);
+  }
+
+  return null;
+}
+
+function parseMonthEndDueAt(text, now) {
+  const monthEndMatch = String(text || "").match(/(下个月|下月|下|本月|这个月)?(?:月底|月末)/);
+
+  if (!monthEndMatch) {
+    return null;
+  }
+
+  const monthOffset = /^下/.test(monthEndMatch[1] || "") ? 1 : 0;
+  const dueAt = new Date(now.getFullYear(), now.getMonth() + monthOffset + 1, 0);
+  return applyTextTime(dueAt, text);
+}
+
+function parseRelativeDueAt(text, now) {
+  if (/后天/.test(text)) {
+    return applyTextTime(addLocalDays(now, 2), text);
+  }
+
+  if (/明天|明日/.test(text)) {
+    return applyTextTime(addLocalDays(now, 1), text);
+  }
+
+  if (/今天|今日|今晚/.test(text)) {
+    return applyTextTime(now, text);
+  }
+
+  return null;
+}
+
+function parseTimeOnlyDueAt(text, now) {
+  if (!parseClockFromText(text) && !/凌晨|早上|上午|中午|下午|下班前|晚上|今晚/.test(text)) {
+    return null;
+  }
+
+  let dueAt = applyTextTime(now, text);
+
+  if (!/今天|今日|今晚/.test(text) && dueAt.getTime() <= now.getTime()) {
+    dueAt = addLocalDays(dueAt, 1);
+  }
+
+  return dueAt;
+}
+
+function inferDueAtFromText(text, now) {
+  const cleanText = String(text || "").trim();
+
+  if (!cleanText) {
+    return null;
+  }
+
+  return (
+    parseNumericDateDueAt(cleanText, now) ||
+    parseMonthDateDueAt(cleanText, now) ||
+    parseWeekdayDueAt(cleanText, now) ||
+    parseRelativeDueAt(cleanText, now) ||
+    parseWeekRangeDueAt(cleanText, now) ||
+    parseMonthEndDueAt(cleanText, now) ||
+    parseTimeOnlyDueAt(cleanText, now)
+  );
+}
+
+function cleanContactName(value) {
+  return String(value || "")
+    .replace(/^[\s@]+/, "")
+    .replace(/[，,。；;！!？?\s].*$/, "")
+    .replace(/^(客户|联系人|同事|负责人)[:：]?/, "")
+    .trim()
+    .slice(0, 12);
+}
+
+function inferContactFromText(text) {
+  const cleanText = String(text || "").trim();
+  const speakerMatch = cleanText.match(/^([^：:\n]{2,12})[：:]/);
+
+  if (speakerMatch) {
+    return cleanContactName(speakerMatch[1]);
+  }
+
+  const titledContactMatch = cleanText.match(
+    /(?:给|问|找|联系|跟进|催|发给|发送给)([\u4e00-\u9fa5A-Za-z][\u4e00-\u9fa5A-Za-zA-Z0-9]{0,6}(?:总|经理|主管|老师|主任|老板|姐|哥))/,
+  );
+
+  if (titledContactMatch) {
+    return cleanContactName(titledContactMatch[1]);
+  }
+
+  const looseContactMatch = cleanText.match(
+    /([\u4e00-\u9fa5A-Za-z][\u4e00-\u9fa5A-Za-zA-Z0-9]{0,6}(?:总|经理|主管|老师|主任|老板))/,
+  );
+
+  if (looseContactMatch) {
+    return cleanContactName(looseContactMatch[1]);
+  }
+
+  return "";
+}
+
+function mergeTagText(value, nextTags) {
+  const tags = normalizeTags(value);
+
+  for (const tag of nextTags) {
+    if (tag && !tags.includes(tag)) {
+      tags.push(tag);
+    }
+  }
+
+  return tags.join(" ");
+}
+
+function isSameLocalDate(left, right) {
+  return startOfLocalDay(left).getTime() === startOfLocalDay(right).getTime();
+}
+
+function inferPriorityFromTextAndDueAt(text, dueAt, now) {
+  const cleanText = String(text || "");
+
+  if (/紧急|尽快|马上|立刻|今天|今日|今晚/.test(cleanText)) {
+    return "high";
+  }
+
+  if (isValidDate(dueAt) && isSameLocalDate(dueAt, now)) {
+    return "high";
+  }
+
+  if (/月底|月末|长期|不急|有空/.test(cleanText)) {
+    return "low";
+  }
+
+  if (/本周|这周|周内|周[一二三四五六日天]|星期[一二三四五六日天]|礼拜[一二三四五六日天]/.test(cleanText)) {
+    return "normal";
+  }
+
+  if (isValidDate(dueAt) && dueAt.getTime() - now.getTime() <= 7 * 24 * 60 * 60 * 1000) {
+    return "normal";
+  }
+
+  return "normal";
+}
+
+function getDraftIntelligenceText(draft) {
+  return [draft?.title, draft?.note]
+    .map((value) => String(value || "").trim())
+    .filter(Boolean)
+    .join("\n");
+}
+
+export function inferTaskIntelligence(text, now = new Date()) {
+  const cleanText = String(text || "").trim();
+  const dueAt = inferDueAtFromText(cleanText, now);
+  const owner = inferContactFromText(cleanText);
+
+  return {
+    dueAt: isValidDate(dueAt) ? dueAt.toISOString() : "",
+    owner,
+    priority: inferPriorityFromTextAndDueAt(cleanText, dueAt, now),
+    tags: owner ? ["客户"] : [],
+  };
+}
+
+export function applyTaskIntelligence(draft, now = new Date()) {
+  const text = getDraftIntelligenceText(draft);
+  const intelligence = inferTaskIntelligence(text, now);
+  const dueAt = draft?.dueAt || intelligence.dueAt;
+  const dueAtDate = dueAt ? new Date(dueAt) : null;
+  const priority =
+    draft?.priority && draft.priority !== "normal"
+      ? draft.priority
+      : inferPriorityFromTextAndDueAt(text, dueAtDate, now);
+
+  return {
+    ...draft,
+    dueAt,
+    owner: String(draft?.owner || "").trim() || intelligence.owner,
+    priority,
+    tags: intelligence.tags.length > 0 ? mergeTagText(draft?.tags, intelligence.tags) : draft?.tags,
+  };
+}
+
 export function normalizeDailyTarget(value) {
   const numberValue = Number.parseInt(value, 10);
 
@@ -171,31 +569,35 @@ export function normalizeAttachments(value) {
 }
 
 export function createTask(draft, now = new Date()) {
-  const title = String(draft.title || "").trim();
+  const smartDraft = applyTaskIntelligence(draft, now);
+  const title = String(smartDraft.title || "").trim();
 
   if (!title) {
     throw new Error("任务标题不能为空");
   }
 
-  const dailySlotValues = normalizeDailySlots(draft.dailySlotValues ?? draft.dailySlots, draft.dailyTarget);
+  const dailySlotValues = normalizeDailySlots(
+    smartDraft.dailySlotValues ?? smartDraft.dailySlots,
+    smartDraft.dailyTarget,
+  );
 
   return {
     id: createId("task"),
     title,
-    source: String(draft.source || "手动录入").trim(),
-    owner: String(draft.owner || "").trim(),
+    source: String(smartDraft.source || "手动录入").trim(),
+    owner: String(smartDraft.owner || "").trim(),
     createdAt: now.toISOString(),
     updatedAt: now.toISOString(),
-    dueAt: draft.dueAt ? new Date(draft.dueAt).toISOString() : "",
+    dueAt: smartDraft.dueAt ? new Date(smartDraft.dueAt).toISOString() : "",
     dailySlots: dailySlotValues,
     dailyTarget: dailySlotValues.length,
     completionRecords: [],
-    priority: draft.priority || "normal",
-    status: draft.status || "todo",
-    tags: normalizeTags(draft.tags),
-    note: String(draft.note || "").trim(),
-    launchAction: normalizeLaunchAction(draft.launchAction),
-    attachments: normalizeAttachments(draft.attachments),
+    priority: smartDraft.priority || "normal",
+    status: smartDraft.status || "todo",
+    tags: normalizeTags(smartDraft.tags),
+    note: String(smartDraft.note || "").trim(),
+    launchAction: normalizeLaunchAction(smartDraft.launchAction),
+    attachments: normalizeAttachments(smartDraft.attachments),
     lastRemindedAt: "",
   };
 }
@@ -364,12 +766,15 @@ export function detectCandidatesFromText(text) {
 }
 
 export function candidateToDraft(candidate) {
-  return {
+  const detectedAt = new Date(candidate.detectedAt || Date.now());
+  const now = isValidDate(detectedAt) ? detectedAt : new Date();
+
+  return applyTaskIntelligence({
     ...emptyTaskDraft,
     title: candidate.text.replace(/^[^：:]{1,12}[：:]\s*/, "").slice(0, 60),
     source: candidate.source,
     note: candidate.text,
-  };
+  }, now);
 }
 
 export function formatDateTime(value) {
