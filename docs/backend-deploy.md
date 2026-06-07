@@ -23,6 +23,8 @@ CORS_ORIGIN=*
 
 `SHERLLY_API_TOKEN` 是后台访问门禁；前端会用 `X-Sherlly-Token` 发送它。账号登录成功后，用户会话 token 使用 `Authorization: Bearer <login-token>` 发送，数据归属于该登录账号。
 
+如果需要更换或同步 token，参考 [Token 更换与重新部署流程](./token-rotation.md)。
+
 ## Render 部署
 
 仓库里已经提供 `render.yaml`。
