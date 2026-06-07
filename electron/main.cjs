@@ -23,6 +23,9 @@ const RENDERER_CONFIG_FILE_NAME = "renderer-config.json";
 const QUICK_CAPTURE_SHORTCUT = "CommandOrControl+Alt+S";
 const LOCAL_DEV_RENDERER_URL = "http://127.0.0.1:5188";
 const DEV_RENDERER_URL = normalizeRendererUrl(process.env.ELECTRON_RENDERER_URL) || LOCAL_DEV_RENDERER_URL;
+const APP_ICON_PATH = path.join(__dirname, "..", "assets", "sherlly-logo.png");
+const APP_ALERT_ICON_PATH = path.join(__dirname, "..", "assets", "sherlly-logo-alert.png");
+const APP_WINDOW_ICON_PATH = path.join(__dirname, "..", "assets", "sherlly-icon.ico");
 
 let mainWindow = null;
 let tray = null;
@@ -242,11 +245,21 @@ function createTrayIcon(fill, accentFill) {
   }
 }
 
+function loadTrayIconAsset(assetPath) {
+  const image = nativeImage.createFromPath(assetPath);
+
+  if (image.isEmpty()) {
+    return null;
+  }
+
+  return image.resize({ width: 16, height: 16 });
+}
+
 function getTrayImages() {
   if (!trayImages) {
     trayImages = {
-      base: createTrayIcon("#12715f", "#dceee8"),
-      alert: createTrayIcon("#c94738", "#fff2a8"),
+      base: loadTrayIconAsset(APP_ICON_PATH) || createTrayIcon("#12715f", "#dceee8"),
+      alert: loadTrayIconAsset(APP_ALERT_ICON_PATH) || createTrayIcon("#c94738", "#fff2a8"),
     };
   }
 
@@ -572,6 +585,7 @@ function createWindow() {
     minWidth: 1040,
     minHeight: 680,
     title: APP_NAME,
+    icon: APP_WINDOW_ICON_PATH,
     backgroundColor: "#f5f7f4",
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
