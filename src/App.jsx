@@ -5,6 +5,7 @@ import {
   CheckCircle2,
   ClipboardList,
   Clock3,
+  Copy,
   Download,
   Eye,
   FileText,
@@ -155,6 +156,36 @@ function shouldShowUpdateStatus(status, dismissedKey) {
   }
 
   return getUpdateDismissKey(status) !== dismissedKey;
+}
+
+function taskToDraft(task) {
+  const tags = Array.isArray(task.tags) ? task.tags : [];
+
+  return {
+    title: task.title || "",
+    source: task.source || "手动录入",
+    owner: task.owner || "",
+    dueAt: toDateTimeInputValue(task.dueAt),
+    dailyTarget: normalizeDailyTarget(task.dailyTarget),
+    dailySlotValues: normalizeDailySlots(task.dailySlots, task.dailyTarget),
+    launchAction: normalizeLaunchAction(task.launchAction),
+    priority: task.priority || "normal",
+    status: task.status || "todo",
+    tags: tags.join(" "),
+    note: task.note || "",
+    attachments: normalizeAttachments(task.attachments),
+  };
+}
+
+function taskToCopyDraft(task) {
+  return {
+    ...taskToDraft(task),
+    status: "todo",
+    attachments: normalizeAttachments(task.attachments).map((attachment) => ({
+      ...attachment,
+      id: createId("attachment"),
+    })),
+  };
 }
 
 function App() {
@@ -1005,20 +1036,15 @@ function App() {
   function editTask(task) {
     setActiveView("tasks");
     setEditingId(task.id);
-    setDraft({
-      title: task.title,
-      source: task.source,
-      owner: task.owner,
-      dueAt: toDateTimeInputValue(task.dueAt),
-      dailyTarget: normalizeDailyTarget(task.dailyTarget),
-      dailySlotValues: normalizeDailySlots(task.dailySlots, task.dailyTarget),
-      launchAction: normalizeLaunchAction(task.launchAction),
-      priority: task.priority,
-      status: task.status,
-      tags: task.tags.join(" "),
-      note: task.note,
-      attachments: normalizeAttachments(task.attachments),
-    });
+    setDraft(taskToDraft(task));
+  }
+
+  function copyTask(task) {
+    setActiveView("tasks");
+    setEditingId("");
+    setTaskFilter("active");
+    setDraft(taskToCopyDraft(task));
+    window.requestAnimationFrame(focusTaskTitle);
   }
 
   function changeTaskStatus(task, status) {
@@ -1423,6 +1449,7 @@ function App() {
                     <TaskRow
                       key={task.id}
                       task={task}
+                      onCopy={copyTask}
                       onEdit={editTask}
                       onStatusChange={changeTaskStatus}
                       onStart={startTask}
@@ -1751,6 +1778,10 @@ function App() {
           onEdit={(task) => {
             setDetailTaskId("");
             editTask(task);
+          }}
+          onCopy={(task) => {
+            setDetailTaskId("");
+            copyTask(task);
           }}
           onPreviewAttachment={previewAttachment}
         />
@@ -2183,7 +2214,7 @@ function ReportTaskItem({ task, onPreviewAttachment, onViewTask }) {
   );
 }
 
-function TaskDetailDialog({ task, onClose, onEdit, onPreviewAttachment }) {
+function TaskDetailDialog({ task, onClose, onCopy, onEdit, onPreviewAttachment }) {
   const attachments = normalizeAttachments(task.attachments);
   const priority = getPriorityMeta(task.priority);
   const status = getStatusMeta(task.status);
@@ -2311,6 +2342,10 @@ function TaskDetailDialog({ task, onClose, onEdit, onPreviewAttachment }) {
         </div>
 
         <div className="task-detail-actions">
+          <button className="secondary-button" type="button" onClick={() => onCopy(task)}>
+            <Copy size={18} />
+            复制任务
+          </button>
           <button className="secondary-button" type="button" onClick={() => onEdit(task)}>
             <FileText size={18} />
             编辑任务
@@ -2378,6 +2413,7 @@ function AttachmentPreviewDialog({ preview, onClose, onOpen }) {
 
 function TaskRow({
   task,
+  onCopy,
   onEdit,
   onStatusChange,
   onStart,
@@ -2512,6 +2548,9 @@ function TaskRow({
             完成任务
           </button>
         )}
+        <button className="icon-button" type="button" onClick={() => onCopy(task)} title="复制任务">
+          <Copy size={17} />
+        </button>
         <button className="icon-button danger" type="button" onClick={() => onDelete(task)} title="删除任务">
           <Trash2 size={17} />
         </button>
