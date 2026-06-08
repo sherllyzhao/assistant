@@ -15,6 +15,22 @@
       "preview_id": "9c1008fa9494495a87bb2394b64fbee3"
     }
   ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "SHERLLY_AUTH_STORE",
+        "class_name": "SherllyAuthStore"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1-auth-store",
+      "new_sqlite_classes": [
+        "SherllyAuthStore"
+      ]
+    }
+  ],
   "vars": {
     "SHERLLY_SESSION_TTL_DAYS": "30",
     "CORS_ORIGIN": "*"

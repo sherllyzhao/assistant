@@ -47,7 +47,7 @@ docker run -p 8787:8787 --env-file .env sherlly-server
 
 ## Cloudflare Workers 部署
 
-Cloudflare 版本不使用 MongoDB；它通过 KV 命名空间 `SHERLLY_DATA` 保存应用数据。
+Cloudflare 版本不使用 MongoDB；它通过 KV 命名空间 `SHERLLY_DATA` 保存应用数据，并用 Durable Object `SHERLLY_AUTH_STORE` 保存账号、密码和会话这类强一致 auth 状态。
 
 1. 安装依赖：
 
@@ -77,19 +77,21 @@ npx wrangler kv namespace create SHERLLY_DATA --preview
 
 把命令输出里的 `preview_id` 填到 `wrangler.jsonc` 的 `kv_namespaces[0].preview_id`。
 
-5. 写入后台访问 token：
+5. 账号与会话的 Durable Object 绑定和 migration 已写入 `wrangler.jsonc`，直接部署即可。
+
+6. 写入后台访问 token：
 
 ```bash
 npm run cf:secret:token
 ```
 
-6. 部署 Worker：
+7. 部署 Worker：
 
 ```bash
 npm run cf:deploy
 ```
 
-7. 部署成功后检查：
+8. 部署成功后检查：
 
 ```bash
 curl https://你的-worker域名/health

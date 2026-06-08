@@ -242,6 +242,15 @@ function getSessionKey(tokenHash) {
   return `sessions:${tokenHash}`;
 }
 
+function jsonInternalResponse(body, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: {
+      "Content-Type": "application/json; charset=utf-8",
+    },
+  });
+}
+
 async function loadData(env, userId) {
   const stored = await env.SHERLLY_DATA.get(getStorageKey(userId));
 
@@ -267,163 +276,400 @@ async function saveData(env, userId, data) {
   return normalized;
 }
 
-async function getUser(env, username) {
-  const stored = await env.SHERLLY_DATA.get(getUserKey(username));
-  return stored ? JSON.parse(stored) : null;
-}
+export class SherllyAuthStore {
+  constructor(state, env) {
+    this.state = state;
+    this.env = env;
+  }
 
-async function saveUser(env, user) {
-  await env.SHERLLY_DATA.put(getUserKey(user.username), JSON.stringify(user));
-}
+  async fetch(request) {
+    try {
+      const url = new URL(request.url);
+      const body = await readJsonBody(request);
 
-async function createAuthResponse(env, user) {
-  const token = randomBase64Url(32);
-  const tokenHash = await sha256Base64Url(token);
-  const expiresAt = new Date();
-  const ttlSeconds = Math.max(1, Number.parseInt(env.SHERLLY_SESSION_TTL_DAYS || SESSION_TTL_DAYS, 10)) * 24 * 60 * 60;
-  expiresAt.setSeconds(expiresAt.getSeconds() + ttlSeconds);
+      if (url.pathname === "/register" && request.method === "POST") {
+        return jsonInternalResponse(await this.registerAccount(body), 201);
+      }
 
-  await env.SHERLLY_DATA.put(
-    getSessionKey(tokenHash),
-    JSON.stringify({
+      if (url.pathname === "/login" && request.method === "POST") {
+        return jsonInternalResponse(await this.loginAccount(body));
+      }
+
+      if (url.pathname === "/session" && request.method === "GET") {
+        const auth = await this.getAuthenticatedSession(request);
+        return jsonInternalResponse({
+          session: publicSession(auth.session),
+          user: publicUser(auth.user),
+        });
+      }
+
+      if (url.pathname === "/password" && request.method === "PUT") {
+        return jsonInternalResponse(await this.changeAccountPassword(request, body));
+      }
+
+      if (url.pathname === "/logout" && request.method === "POST") {
+        return jsonInternalResponse(await this.logoutAccount(request));
+      }
+
+      return jsonInternalResponse({ ok: false, message: "Not found" }, 404);
+    } catch (error) {
+      return jsonInternalResponse({ ok: false, message: error.message || "Auth store error" }, error.status || 500);
+    }
+  }
+
+  async readLegacyJson(key) {
+    if (!this.env.SHERLLY_DATA?.get) {
+      return null;
+    }
+
+    const stored = await this.env.SHERLLY_DATA.get(key);
+    return stored ? JSON.parse(stored) : null;
+  }
+
+  async deleteLegacyKey(key) {
+    if (this.env.SHERLLY_DATA?.delete) {
+      await this.env.SHERLLY_DATA.delete(key);
+    }
+  }
+
+  async getUser(username) {
+    const normalizedUsername = normalizeUsername(username);
+    const key = getUserKey(normalizedUsername);
+    const stored = await this.state.storage.get(key);
+
+    if (stored) {
+      return stored;
+    }
+
+    const legacyUser = await this.readLegacyJson(key);
+
+    if (!legacyUser) {
+      return null;
+    }
+
+    const user = {
+      ...legacyUser,
+      username: normalizedUsername,
+    };
+
+    await this.saveUser(user);
+    return user;
+  }
+
+  async saveUser(user) {
+    await this.state.storage.put(getUserKey(user.username), user);
+  }
+
+  async createAuthResponse(user) {
+    const token = randomBase64Url(32);
+    const tokenHash = await sha256Base64Url(token);
+    const expiresAt = new Date();
+    const ttlSeconds =
+      Math.max(1, Number.parseInt(this.env.SHERLLY_SESSION_TTL_DAYS || SESSION_TTL_DAYS, 10)) * 24 * 60 * 60;
+    expiresAt.setSeconds(expiresAt.getSeconds() + ttlSeconds);
+
+    await this.state.storage.put(getSessionKey(tokenHash), {
       tokenHash,
       userId: user.id,
       username: user.username,
       createdAt: new Date().toISOString(),
       expiresAt: expiresAt.toISOString(),
-    }),
-    { expirationTtl: ttlSeconds },
-  );
-
-  return {
-    token,
-    expiresAt: expiresAt.toISOString(),
-    user: publicUser(user),
-  };
-}
-
-async function registerAccount(env, body) {
-  const username = normalizeUsername(body?.username);
-  const password = String(body?.password || "");
-  const displayName = String(body?.displayName || "").trim().slice(0, 40) || username;
-
-  validateAccountInput(username, password);
-
-  if (await getUser(env, username)) {
-    throw createHttpError(409, "这个账号已经存在");
-  }
-
-  const now = new Date().toISOString();
-  const user = {
-    id: `user_${crypto.randomUUID()}`,
-    username,
-    displayName,
-    password: await createPasswordHash(password),
-    createdAt: now,
-    updatedAt: now,
-  };
-
-  await saveUser(env, user);
-  return createAuthResponse(env, user);
-}
-
-async function loginAccount(env, body) {
-  const username = normalizeUsername(body?.username);
-  const user = await getUser(env, username);
-
-  if (!user || !(await verifyPassword(String(body?.password || ""), user.password))) {
-    throw createHttpError(401, "账号或密码不正确");
-  }
-
-  await saveUser(env, {
-    ...user,
-    lastLoginAt: new Date().toISOString(),
-  });
-
-  return createAuthResponse(env, user);
-}
-
-async function deleteUserSessionsExcept(env, userId, currentTokenHash) {
-  let cursor = undefined;
-  let deletedCount = 0;
-
-  do {
-    const listed = await env.SHERLLY_DATA.list({
-      prefix: "sessions:",
-      cursor,
     });
 
-    for (const key of listed.keys || []) {
-      const stored = await env.SHERLLY_DATA.get(key.name);
-      const session = stored ? JSON.parse(stored) : null;
+    return {
+      token,
+      expiresAt: expiresAt.toISOString(),
+      user: publicUser(user),
+    };
+  }
 
+  async registerAccount(body) {
+    const username = normalizeUsername(body?.username);
+    const password = String(body?.password || "");
+    const displayName = String(body?.displayName || "").trim().slice(0, 40) || username;
+
+    validateAccountInput(username, password);
+
+    if (await this.getUser(username)) {
+      throw createHttpError(409, "这个账号已经存在");
+    }
+
+    const now = new Date().toISOString();
+    const user = {
+      id: `user_${crypto.randomUUID()}`,
+      username,
+      displayName,
+      password: await createPasswordHash(password),
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    await this.saveUser(user);
+    return this.createAuthResponse(user);
+  }
+
+  async loginAccount(body) {
+    const username = normalizeUsername(body?.username);
+    const user = await this.getUser(username);
+
+    if (!user || !(await verifyPassword(String(body?.password || ""), user.password))) {
+      throw createHttpError(401, "账号或密码不正确");
+    }
+
+    const updatedUser = {
+      ...user,
+      lastLoginAt: new Date().toISOString(),
+    };
+
+    await this.saveUser(updatedUser);
+    return this.createAuthResponse(updatedUser);
+  }
+
+  async changeAccountPassword(request, body) {
+    const auth = await this.getAuthenticatedSession(request);
+    const currentPassword = String(body?.currentPassword || "");
+    const nextPassword = String(body?.nextPassword || "");
+
+    validatePasswordInput(nextPassword);
+
+    if (!(await verifyPassword(currentPassword, auth.user.password))) {
+      throw createHttpError(401, "当前密码不正确");
+    }
+
+    if (currentPassword === nextPassword) {
+      throw createHttpError(400, "新密码不能和当前密码相同");
+    }
+
+    const now = new Date().toISOString();
+    const user = {
+      ...auth.user,
+      password: await createPasswordHash(nextPassword),
+      passwordUpdatedAt: now,
+      updatedAt: now,
+    };
+
+    await this.saveUser(user);
+    await this.state.storage.put(getSessionKey(auth.session.tokenHash), {
+      ...auth.session,
+      passwordVerifiedAt: now,
+    });
+
+    return {
+      ok: true,
+      signedOutSessions: await this.deleteUserSessionsExcept(user.id, auth.session.tokenHash),
+    };
+  }
+
+  async logoutAccount(request) {
+    const tokenHash = await this.getRequestTokenHash(request);
+    await this.deleteSessionByTokenHash(tokenHash);
+    return { ok: true };
+  }
+
+  async getRequestTokenHash(request) {
+    const token = getBearerToken(request);
+
+    if (!token) {
+      throw createHttpError(401, "请先登录");
+    }
+
+    return sha256Base64Url(token);
+  }
+
+  async getAuthenticatedSession(request) {
+    const tokenHash = await this.getRequestTokenHash(request);
+    const key = getSessionKey(tokenHash);
+    const session = (await this.state.storage.get(key)) || (await this.migrateLegacySession(tokenHash));
+
+    if (!session || new Date(session.expiresAt).getTime() <= Date.now()) {
+      await this.deleteSessionByTokenHash(tokenHash);
+      throw createHttpError(401, "登录已过期，请重新登录");
+    }
+
+    const user = await this.getUser(session.username);
+
+    if (!user || user.id !== session.userId) {
+      await this.deleteSessionByTokenHash(tokenHash);
+      throw createHttpError(401, "登录已失效，请重新登录");
+    }
+
+    if (isSessionBeforePasswordUpdate(session, user)) {
+      await this.deleteSessionByTokenHash(tokenHash);
+      throw createHttpError(401, "登录已失效，请重新登录");
+    }
+
+    return {
+      session,
+      user,
+    };
+  }
+
+  async migrateLegacySession(tokenHash) {
+    const key = getSessionKey(tokenHash);
+    const legacySession = await this.readLegacyJson(key);
+
+    if (!legacySession) {
+      return null;
+    }
+
+    await this.state.storage.put(key, legacySession);
+    return legacySession;
+  }
+
+  async deleteSessionByTokenHash(tokenHash) {
+    const key = getSessionKey(tokenHash);
+    await this.state.storage.delete(key);
+    await this.deleteLegacyKey(key);
+  }
+
+  async deleteUserSessionsExcept(userId, currentTokenHash) {
+    const deletedTokenHashes = new Set();
+    let deletedCount = 0;
+    const sessions = await this.state.storage.list({ prefix: "sessions:" });
+
+    for (const [key, session] of sessions) {
       if (session?.userId === userId && session.tokenHash !== currentTokenHash) {
-        await env.SHERLLY_DATA.delete(key.name);
+        await this.state.storage.delete(key);
+        deletedTokenHashes.add(session.tokenHash);
         deletedCount += 1;
       }
     }
 
-    cursor = listed.list_complete ? undefined : listed.cursor;
-  } while (cursor);
+    return deletedCount + (await this.deleteLegacyUserSessionsExcept(userId, currentTokenHash, deletedTokenHashes));
+  }
 
-  return deletedCount;
+  async deleteLegacyUserSessionsExcept(userId, currentTokenHash, deletedTokenHashes) {
+    if (!this.env.SHERLLY_DATA?.list || !this.env.SHERLLY_DATA?.delete) {
+      return 0;
+    }
+
+    let cursor = undefined;
+    let deletedCount = 0;
+
+    do {
+      const listed = await this.env.SHERLLY_DATA.list({
+        prefix: "sessions:",
+        cursor,
+      });
+
+      for (const key of listed.keys || []) {
+        const session = await this.readLegacyJson(key.name);
+
+        if (session?.userId === userId && session.tokenHash !== currentTokenHash) {
+          await this.env.SHERLLY_DATA.delete(key.name);
+
+          if (!deletedTokenHashes.has(session.tokenHash)) {
+            deletedTokenHashes.add(session.tokenHash);
+            deletedCount += 1;
+          }
+        }
+      }
+
+      cursor = listed.list_complete ? undefined : listed.cursor;
+    } while (cursor);
+
+    return deletedCount;
+  }
 }
 
-async function changeAccountPassword(env, auth, body) {
-  const currentPassword = String(body?.currentPassword || "");
-  const nextPassword = String(body?.nextPassword || "");
-
-  validatePasswordInput(nextPassword);
-
-  if (!(await verifyPassword(currentPassword, auth.user.password))) {
-    throw createHttpError(401, "当前密码不正确");
+async function readJsonBody(request) {
+  if (request.method === "GET" || request.method === "HEAD") {
+    return {};
   }
 
-  if (currentPassword === nextPassword) {
-    throw createHttpError(400, "新密码不能和当前密码相同");
+  try {
+    return await request.json();
+  } catch {
+    return {};
   }
+}
 
-  const now = new Date().toISOString();
-
-  await saveUser(env, {
-    ...auth.user,
-    password: await createPasswordHash(nextPassword),
-    passwordUpdatedAt: now,
-    updatedAt: now,
-  });
-
+function publicSession(session) {
   return {
-    ok: true,
-    signedOutSessions: await deleteUserSessionsExcept(env, auth.user.id, auth.session.tokenHash),
+    tokenHash: session.tokenHash,
+    userId: session.userId,
+    username: session.username,
+    createdAt: session.createdAt,
+    passwordVerifiedAt: session.passwordVerifiedAt,
+    expiresAt: session.expiresAt,
   };
+}
+
+function isSessionBeforePasswordUpdate(session, user) {
+  const sessionCreatedAt = Date.parse(session?.passwordVerifiedAt || session?.createdAt || "");
+  const passwordUpdatedAt = Date.parse(user?.passwordUpdatedAt || "");
+
+  return Boolean(sessionCreatedAt && passwordUpdatedAt && sessionCreatedAt < passwordUpdatedAt);
+}
+
+function getAuthStoreStub(env) {
+  if (!env.SHERLLY_AUTH_STORE?.idFromName || !env.SHERLLY_AUTH_STORE?.get) {
+    throw createHttpError(500, "缺少 SHERLLY_AUTH_STORE Durable Object 绑定");
+  }
+
+  return env.SHERLLY_AUTH_STORE.get(env.SHERLLY_AUTH_STORE.idFromName("global"));
+}
+
+async function requestAuthStore(env, path, options = {}) {
+  const headers = new Headers(options.headers || {});
+
+  if (options.body !== undefined && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
+
+  const response = await getAuthStoreStub(env).fetch(`https://sherlly-auth.internal${path}`, {
+    method: options.method || "GET",
+    headers,
+    body: options.body === undefined ? undefined : JSON.stringify(options.body),
+  });
+  const body = await response.json();
+
+  if (!response.ok) {
+    throw createHttpError(response.status, body?.message || "账号服务请求失败");
+  }
+
+  return body;
+}
+
+async function registerAccount(env, body) {
+  return requestAuthStore(env, "/register", {
+    method: "POST",
+    body,
+  });
+}
+
+async function loginAccount(env, body) {
+  return requestAuthStore(env, "/login", {
+    method: "POST",
+    body,
+  });
 }
 
 async function getAuthenticatedSession(request, env) {
-  const token = getBearerToken(request);
+  return requestAuthStore(env, "/session", {
+    headers: {
+      Authorization: request.headers.get("Authorization") || "",
+    },
+  });
+}
 
-  if (!token) {
-    throw createHttpError(401, "请先登录");
-  }
+async function changeAccountPassword(env, request, body) {
+  return requestAuthStore(env, "/password", {
+    method: "PUT",
+    headers: {
+      Authorization: request.headers.get("Authorization") || "",
+    },
+    body,
+  });
+}
 
-  const tokenHash = await sha256Base64Url(token);
-  const stored = await env.SHERLLY_DATA.get(getSessionKey(tokenHash));
-  const session = stored ? JSON.parse(stored) : null;
-
-  if (!session || new Date(session.expiresAt).getTime() <= Date.now()) {
-    throw createHttpError(401, "登录已过期，请重新登录");
-  }
-
-  const user = await getUser(env, session.username);
-
-  if (!user || user.id !== session.userId) {
-    await env.SHERLLY_DATA.delete(getSessionKey(tokenHash));
-    throw createHttpError(401, "登录已失效，请重新登录");
-  }
-
-  return {
-    session,
-    user,
-  };
+async function logoutAccount(env, request) {
+  return requestAuthStore(env, "/logout", {
+    method: "POST",
+    headers: {
+      Authorization: request.headers.get("Authorization") || "",
+    },
+  });
 }
 
 async function handleRequest(request, env) {
@@ -447,11 +693,13 @@ async function handleRequest(request, env) {
 
   if (url.pathname === "/ready" && request.method === "GET") {
     const kvReady = Boolean(env.SHERLLY_DATA?.get && env.SHERLLY_DATA?.put);
+    const authReady = Boolean(env.SHERLLY_AUTH_STORE?.idFromName && env.SHERLLY_AUTH_STORE?.get);
 
     return jsonResponse(request, env, {
-      ok: kvReady,
+      ok: kvReady && authReady,
       storage: kvReady ? "kv" : "missing",
-    }, kvReady ? 200 : 500);
+      authStorage: authReady ? "durable_object" : "missing",
+    }, kvReady && authReady ? 200 : 500);
   }
 
   if (url.pathname !== "/api/data" && !url.pathname.startsWith("/api/auth/")) {
@@ -476,14 +724,11 @@ async function handleRequest(request, env) {
   }
 
   if (url.pathname === "/api/auth/password" && request.method === "PUT") {
-    const auth = await getAuthenticatedSession(request, env);
-    return jsonResponse(request, env, await changeAccountPassword(env, auth, await request.json()));
+    return jsonResponse(request, env, await changeAccountPassword(env, request, await request.json()));
   }
 
   if (url.pathname === "/api/auth/logout" && request.method === "POST") {
-    const auth = await getAuthenticatedSession(request, env);
-    await env.SHERLLY_DATA.delete(getSessionKey(auth.session.tokenHash));
-    return jsonResponse(request, env, { ok: true });
+    return jsonResponse(request, env, await logoutAccount(env, request));
   }
 
   if (url.pathname !== "/api/data") {

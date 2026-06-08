@@ -349,7 +349,7 @@ async function changeAccountPassword(user, session, body) {
   const sessions = await getSessionsCollection();
   const now = new Date();
 
-  await users.updateOne(
+  const updateResult = await users.updateOne(
     { id: user.id },
     {
       $set: {
@@ -359,6 +359,11 @@ async function changeAccountPassword(user, session, body) {
       },
     },
   );
+
+  if (!updateResult.matchedCount) {
+    throw createHttpError(500, "账号更新失败，请重新登录后再试");
+  }
+
   const deleteResult = await sessions.deleteMany({
     userId: user.id,
     _id: { $ne: session._id },

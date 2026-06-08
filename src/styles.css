@@ -27,12 +27,13 @@
 
 body {
   margin: 0;
-  min-width: 360px;
+  min-width: 320px;
   background:
     linear-gradient(135deg, rgba(18, 113, 95, 0.12), transparent 28%),
     linear-gradient(315deg, rgba(201, 71, 56, 0.08), transparent 24%),
     var(--bg);
   color: var(--ink);
+  overflow-x: hidden;
 }
 
 button,
@@ -1740,15 +1741,22 @@ textarea:focus {
 }
 
 @media (max-width: 760px) {
+  body {
+    background:
+      linear-gradient(180deg, rgba(220, 238, 232, 0.86), transparent 210px),
+      var(--bg);
+  }
+
   .app-shell {
-    width: min(100vw - 18px, 680px);
-    padding-top: 18px;
+    width: 100%;
+    max-width: 680px;
+    padding: 12px 10px calc(28px + env(safe-area-inset-bottom));
   }
 
   .mobile-home {
     display: grid;
-    gap: 12px;
-    margin-bottom: 16px;
+    gap: 10px;
+    margin: 0 0 12px;
   }
 
   .mobile-home-heading {
@@ -1760,13 +1768,14 @@ textarea:focus {
 
   .mobile-home-heading h2 {
     margin: 0;
-    font-size: 22px;
+    font-size: 23px;
     line-height: 1.2;
   }
 
   .mobile-home-heading .secondary-button {
     flex: 0 0 auto;
-    min-width: 92px;
+    min-width: 88px;
+    min-height: 40px;
   }
 
   .mobile-stat-strip {
@@ -1780,27 +1789,27 @@ textarea:focus {
     align-items: center;
     justify-content: center;
     gap: 7px;
-    min-height: 38px;
+    min-height: 42px;
     color: var(--accent-strong);
-    background: var(--accent-soft);
+    background: rgba(220, 238, 232, 0.88);
     border: 1px solid rgba(18, 113, 95, 0.24);
     border-radius: 8px;
-    font-size: 15px;
+    font-size: 16px;
     font-weight: 900;
   }
 
   .mobile-capture {
     display: grid;
     gap: 10px;
-    padding: 12px;
+    padding: 11px;
     background: rgba(255, 255, 255, 0.94);
     border: 1px solid var(--line);
     border-radius: 8px;
-    box-shadow: 0 12px 26px rgba(25, 45, 38, 0.08);
+    box-shadow: 0 8px 18px rgba(25, 45, 38, 0.07);
   }
 
   .mobile-capture textarea {
-    min-height: 70px;
+    min-height: 76px;
   }
 
   .mobile-capture-actions {
@@ -1812,6 +1821,7 @@ textarea:focus {
   .mobile-capture-actions .primary-button,
   .mobile-capture-actions .secondary-button {
     width: 100%;
+    min-height: 42px;
   }
 
   .mobile-capture-status {
@@ -1824,18 +1834,18 @@ textarea:focus {
 
   .mobile-task-list {
     display: grid;
-    gap: 10px;
+    gap: 8px;
   }
 
   .mobile-task-card {
     display: grid;
-    gap: 9px;
-    padding: 12px;
+    gap: 10px;
+    padding: 11px;
     background: rgba(255, 255, 255, 0.94);
     border: 1px solid var(--line);
-    border-left: 5px solid var(--accent);
+    border-left: 4px solid var(--accent);
     border-radius: 8px;
-    box-shadow: 0 10px 22px rgba(25, 45, 38, 0.07);
+    box-shadow: 0 8px 18px rgba(25, 45, 38, 0.06);
   }
 
   .mobile-task-card.priority-high {
@@ -1900,13 +1910,13 @@ textarea:focus {
 
   .mobile-task-actions {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(72px, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 7px;
   }
 
   .mobile-task-actions button {
     min-width: 0;
-    min-height: 34px;
+    min-height: 38px;
     padding: 0 6px;
     color: var(--ink);
     background: var(--surface-muted);
@@ -2028,5 +2038,287 @@ textarea:focus {
 
   .password-form .primary-button {
     width: 100%;
+  }
+
+  .topbar {
+    display: grid;
+    gap: 10px;
+    margin-bottom: 12px;
+  }
+
+  .topbar h1 {
+    font-size: 24px;
+    line-height: 1.18;
+  }
+
+  .topbar-actions {
+    display: flex;
+    gap: 8px;
+    align-items: stretch;
+    justify-content: flex-start;
+  }
+
+  .topbar-actions .account-chip {
+    flex: 1 0 100%;
+    min-height: 40px;
+  }
+
+  .topbar-actions .icon-button {
+    flex: 0 0 42px;
+    min-height: 42px;
+  }
+
+  .topbar-actions .primary-button {
+    flex: 1 1 132px;
+    min-width: 0;
+    min-height: 42px;
+  }
+
+  .topbar-actions .primary-button kbd {
+    display: none;
+  }
+
+  .sync-error-banner,
+  .update-banner {
+    margin-bottom: 12px;
+  }
+
+  .metrics-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    margin-bottom: 10px;
+  }
+
+  .metric-card {
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 7px 9px;
+    min-height: 62px;
+    padding: 10px;
+    box-shadow: 0 8px 18px rgba(25, 45, 38, 0.05);
+  }
+
+  .metric-card span {
+    font-size: 12px;
+    font-weight: 800;
+  }
+
+  .metric-card strong {
+    grid-column: 2;
+    font-size: 21px;
+    line-height: 1;
+  }
+
+  .view-switcher {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+    margin-bottom: 10px;
+    padding: 5px;
+    background: rgba(255, 255, 255, 0.72);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+  }
+
+  .view-switcher button {
+    min-height: 42px;
+    padding: 0 8px;
+    text-align: center;
+    box-shadow: none;
+  }
+
+  .view-switcher button strong {
+    align-self: center;
+    font-size: 13px;
+  }
+
+  .view-switcher button span {
+    display: none;
+  }
+
+  .workspace-grid {
+    gap: 12px;
+  }
+
+  .task-area,
+  .panel,
+  .profile-card,
+  .report-card,
+  .report-section {
+    padding: 12px;
+    box-shadow: 0 8px 18px rgba(25, 45, 38, 0.05);
+  }
+
+  .section-toolbar,
+  .panel-heading {
+    display: grid;
+    gap: 10px;
+    margin-bottom: 12px;
+  }
+
+  .search-box {
+    min-height: 42px;
+  }
+
+  .segmented-control {
+    gap: 6px;
+    margin: 0 -2px 12px;
+    padding: 0 2px 4px;
+    scrollbar-width: none;
+  }
+
+  .segmented-control::-webkit-scrollbar {
+    display: none;
+  }
+
+  .segmented-control > svg {
+    flex: 0 0 auto;
+  }
+
+  .segmented-control button {
+    min-height: 36px;
+    padding: 0 12px;
+    background: rgba(255, 255, 255, 0.68);
+    border-color: var(--line);
+    white-space: nowrap;
+  }
+
+  .task-list,
+  .candidate-list,
+  .log-list {
+    gap: 8px;
+  }
+
+  .task-row {
+    display: grid;
+    gap: 11px;
+    padding: 11px;
+    border-left-width: 4px;
+    box-shadow: 0 8px 18px rgba(25, 45, 38, 0.05);
+  }
+
+  .task-title-line h3 {
+    font-size: 15px;
+  }
+
+  .task-meta span,
+  .mobile-task-meta span,
+  .task-detail-meta span {
+    max-width: 100%;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .daily-progress {
+    width: 100%;
+    justify-content: space-between;
+    margin-top: 8px;
+  }
+
+  .slot-state-list {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .slot-state {
+    justify-content: center;
+    text-align: center;
+  }
+
+  .task-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 7px;
+  }
+
+  .task-actions select {
+    grid-column: 1 / -1;
+    min-height: 40px;
+  }
+
+  .task-actions button {
+    min-height: 40px;
+  }
+
+  .task-actions .icon-button {
+    width: 100%;
+  }
+
+  .capture-action-bar {
+    top: 8px;
+    gap: 6px;
+    margin: -2px 0 12px;
+    padding: 6px;
+  }
+
+  .capture-action-bar .primary-button,
+  .capture-action-bar .secondary-button {
+    min-height: 40px;
+    padding: 0 6px;
+    font-size: 12px;
+  }
+
+  .drop-capture {
+    display: none;
+  }
+
+  .task-form,
+  .form-grid {
+    gap: 10px;
+  }
+
+  input,
+  select,
+  textarea {
+    min-height: 42px;
+    padding: 9px 10px;
+    font-size: 14px;
+  }
+
+  textarea {
+    min-height: 88px;
+  }
+
+  .slot-options {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .slot-option {
+    min-height: 40px;
+    padding: 0 10px;
+  }
+
+  .candidate-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .candidate-actions button {
+    min-height: 38px;
+  }
+
+  .attachment-item {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .attachment-item-actions {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .attachment-item-actions .icon-button {
+    width: 100%;
+  }
+
+  .modal-backdrop {
+    align-items: end;
+    padding: 10px;
+  }
+
+  .task-detail-dialog,
+  .attachment-preview-dialog {
+    width: 100%;
+    max-height: calc(100vh - 20px);
+    padding: 14px;
   }
 }
