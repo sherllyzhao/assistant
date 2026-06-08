@@ -639,8 +639,12 @@ export function isOverdue(task, now = new Date()) {
   return Boolean(task.dueAt && isActiveTask(task) && new Date(task.dueAt).getTime() < now.getTime());
 }
 
-export function getReminderLeadMinutes(task) {
+export function getReminderIntervalMinutes(task) {
   return getPriorityMeta(task?.priority).reminderMinutes;
+}
+
+export function getReminderLeadMinutes(task) {
+  return getReminderIntervalMinutes(task);
 }
 
 export function getTaskReminderAt(task) {
@@ -654,7 +658,7 @@ export function getTaskReminderAt(task) {
     return "";
   }
 
-  return new Date(dueTime - getReminderLeadMinutes(task) * 60 * 1000).toISOString();
+  return new Date(dueTime).toISOString();
 }
 
 export function getLocalDateKey(value = new Date()) {
@@ -726,15 +730,19 @@ export function shouldRemindTask(task, now = new Date()) {
   }
 
   const dueTime = new Date(task.dueAt).getTime();
-  const reminderWindow = getReminderLeadMinutes(task) * 60 * 1000;
+  const reminderInterval = getReminderIntervalMinutes(task) * 60 * 1000;
   const lastRemindedTime = task.lastRemindedAt ? new Date(task.lastRemindedAt).getTime() : 0;
   const nowTime = now.getTime();
 
-  if (!Number.isFinite(dueTime)) {
+  if (!Number.isFinite(dueTime) || !Number.isFinite(reminderInterval) || reminderInterval <= 0) {
     return false;
   }
 
-  return nowTime >= dueTime - reminderWindow && nowTime - lastRemindedTime > reminderWindow;
+  if (nowTime < dueTime) {
+    return false;
+  }
+
+  return lastRemindedTime === 0 || nowTime - lastRemindedTime >= reminderInterval;
 }
 
 export function shouldRemindCandidate(candidate, now = new Date()) {

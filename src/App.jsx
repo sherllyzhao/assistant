@@ -43,7 +43,7 @@ import {
   formatDateTime,
   getDailyProgress,
   getPriorityMeta,
-  getReminderLeadMinutes,
+  getReminderIntervalMinutes,
   getStatusMeta,
   getTaskReminderAt,
   isActiveTask,
@@ -209,7 +209,7 @@ function formatIcsDate(value) {
 function createTaskCalendarText(task) {
   const start = new Date(task.dueAt);
   const end = new Date(start.getTime() + 30 * 60 * 1000);
-  const reminderMinutes = getReminderLeadMinutes(task);
+  const reminderMinutes = getReminderIntervalMinutes(task);
   const uid = `${task.id || Date.now()}@sherlly-assistant`;
   const description = [task.note, task.owner ? `负责人：${task.owner}` : "", task.source ? `来源：${task.source}` : ""]
     .filter(Boolean)
@@ -229,9 +229,9 @@ function createTaskCalendarText(task) {
     `SUMMARY:${escapeIcsText(task.title)}`,
     `DESCRIPTION:${escapeIcsText(description || task.title)}`,
     "BEGIN:VALARM",
-    `TRIGGER:-PT${reminderMinutes}M`,
+    "TRIGGER:PT0M",
     "ACTION:DISPLAY",
-    `DESCRIPTION:${escapeIcsText(task.title)}`,
+    `DESCRIPTION:${escapeIcsText(`${task.title}，之后每${reminderMinutes}分钟提醒一次`)}`,
     "END:VALARM",
     "END:VEVENT",
     "END:VCALENDAR",
@@ -2636,7 +2636,7 @@ function TaskDetailDialog({ task, onAddToCalendar, onClose, onCopy, onEdit, onPr
           {reminderAt ? (
             <span>
               <Bell size={14} />
-              提醒 {formatDateTime(reminderAt)}
+              每{getReminderIntervalMinutes(task)}分钟提醒 · 从 {formatDateTime(reminderAt)} 开始
             </span>
           ) : null}
           {task.owner ? <span>负责人：{task.owner}</span> : null}
@@ -2851,7 +2851,7 @@ function TaskRow({
           {reminderAt ? (
             <span>
               <Bell size={14} />
-              提前{getReminderLeadMinutes(task)}分钟提醒 · {formatDateTime(reminderAt)}
+              每{getReminderIntervalMinutes(task)}分钟提醒 · 从 {formatDateTime(reminderAt)} 开始
             </span>
           ) : null}
           {task.owner ? <span>{task.owner}</span> : null}
