@@ -520,6 +520,10 @@ button:disabled {
   align-items: start;
 }
 
+.workspace-grid > * {
+  min-width: 0;
+}
+
 .workspace-grid.profile-grid {
   grid-template-columns: 1fr;
 }
@@ -1753,6 +1757,21 @@ textarea:focus {
     padding: 12px 10px calc(28px + env(safe-area-inset-bottom));
   }
 
+  .app-shell,
+  .workspace-grid,
+  .task-area,
+  .panel,
+  .task-list,
+  .task-row,
+  .task-main,
+  .task-title-line,
+  .task-meta,
+  .task-actions,
+  .slot-state-list {
+    min-width: 0;
+    max-width: 100%;
+  }
+
   .mobile-home {
     display: grid;
     gap: 10px;
@@ -2159,6 +2178,9 @@ textarea:focus {
   }
 
   .segmented-control {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
     gap: 6px;
     margin: 0 -2px 12px;
     padding: 0 2px 4px;
@@ -2196,7 +2218,10 @@ textarea:focus {
   }
 
   .task-title-line h3 {
+    min-width: 0;
+    max-width: 100%;
     font-size: 15px;
+    word-break: break-word;
   }
 
   .task-meta span,
@@ -2205,6 +2230,7 @@ textarea:focus {
     max-width: 100%;
     min-width: 0;
     overflow-wrap: anywhere;
+    white-space: normal;
   }
 
   .daily-progress {
@@ -2231,11 +2257,18 @@ textarea:focus {
 
   .task-actions select {
     grid-column: 1 / -1;
+    min-width: 0;
+    max-width: 100%;
     min-height: 40px;
   }
 
   .task-actions button {
+    min-width: 0;
+    max-width: 100%;
     min-height: 40px;
+    padding: 0 6px;
+    line-height: 1.25;
+    white-space: normal;
   }
 
   .task-actions .icon-button {

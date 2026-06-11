@@ -84,6 +84,11 @@ function isValidDate(value) {
   return value instanceof Date && Number.isFinite(value.getTime());
 }
 
+function getFiniteTime(value) {
+  const time = new Date(value).getTime();
+  return Number.isFinite(time) ? time : NaN;
+}
+
 function startOfLocalDay(value) {
   const date = new Date(value);
   date.setHours(0, 0, 0, 0);
@@ -652,13 +657,19 @@ export function getTaskReminderAt(task) {
     return "";
   }
 
-  const dueTime = new Date(task.dueAt).getTime();
+  const dueTime = getFiniteTime(task.dueAt);
 
   if (!Number.isFinite(dueTime)) {
     return "";
   }
 
-  return new Date(dueTime).toISOString();
+  const reminderOffsetMs = getReminderLeadMinutes(task) * 60 * 1000;
+
+  if (!Number.isFinite(reminderOffsetMs) || reminderOffsetMs < 0) {
+    return new Date(dueTime).toISOString();
+  }
+
+  return new Date(dueTime - reminderOffsetMs).toISOString();
 }
 
 export function getLocalDateKey(value = new Date()) {
@@ -725,32 +736,42 @@ export function getDailyProgress(task, date = new Date()) {
 }
 
 export function shouldRemindTask(task, now = new Date()) {
-  if (!task.dueAt || !isActiveTask(task)) {
+  if (!task?.dueAt || !isActiveTask(task)) {
     return false;
   }
 
-  const dueTime = new Date(task.dueAt).getTime();
+  const dueTime = getFiniteTime(task.dueAt);
+  const reminderStartTime = getFiniteTime(getTaskReminderAt(task));
   const reminderInterval = getReminderIntervalMinutes(task) * 60 * 1000;
-  const lastRemindedTime = task.lastRemindedAt ? new Date(task.lastRemindedAt).getTime() : 0;
+  const lastRemindedTime = task.lastRemindedAt ? getFiniteTime(task.lastRemindedAt) : 0;
   const nowTime = now.getTime();
 
-  if (!Number.isFinite(dueTime) || !Number.isFinite(reminderInterval) || reminderInterval <= 0) {
+  if (
+    !Number.isFinite(dueTime) ||
+    !Number.isFinite(reminderStartTime) ||
+    !Number.isFinite(reminderInterval) ||
+    reminderInterval <= 0
+  ) {
     return false;
   }
 
-  if (nowTime < dueTime) {
+  if (nowTime < reminderStartTime) {
     return false;
   }
 
-  return lastRemindedTime === 0 || nowTime - lastRemindedTime >= reminderInterval;
+  return !Number.isFinite(lastRemindedTime) || lastRemindedTime === 0 || nowTime - lastRemindedTime >= reminderInterval;
 }
 
 export function shouldRemindCandidate(candidate, now = new Date()) {
-  const detectedAt = new Date(candidate.detectedAt).getTime();
-  const remindedAt = candidate.remindedAt ? new Date(candidate.remindedAt).getTime() : 0;
+  const detectedAt = getFiniteTime(candidate?.detectedAt);
+  const remindedAt = candidate?.remindedAt ? getFiniteTime(candidate.remindedAt) : 0;
   const thirtyMinutes = 30 * 60 * 1000;
 
-  return now.getTime() - detectedAt >= thirtyMinutes && remindedAt === 0;
+  return (
+    Number.isFinite(detectedAt) &&
+    now.getTime() - detectedAt >= thirtyMinutes &&
+    (!Number.isFinite(remindedAt) || remindedAt === 0)
+  );
 }
 
 export function detectCandidatesFromText(text) {

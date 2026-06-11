@@ -109,6 +109,7 @@ const viewOptions = [
 ];
 
 const cloudSyncEnabled = Boolean(import.meta.env.VITE_SHERLLY_API_URL);
+const REMINDER_ALERT_AUTO_DISMISS_MS = 5000;
 const visibleUpdateStates = new Set(["available", "downloading", "downloaded", "installing", "error"]);
 const imageMimeExtensions = {
   "image/apng": "apng",
@@ -229,9 +230,9 @@ function createTaskCalendarText(task) {
     `SUMMARY:${escapeIcsText(task.title)}`,
     `DESCRIPTION:${escapeIcsText(description || task.title)}`,
     "BEGIN:VALARM",
-    "TRIGGER:PT0M",
+    `TRIGGER:-PT${reminderMinutes}M`,
     "ACTION:DISPLAY",
-    `DESCRIPTION:${escapeIcsText(`${task.title}，之后每${reminderMinutes}分钟提醒一次`)}`,
+    `DESCRIPTION:${escapeIcsText(`${task.title}，提前${reminderMinutes}分钟提醒`)}`,
     "END:VALARM",
     "END:VEVENT",
     "END:VCALENDAR",
@@ -309,6 +310,7 @@ function App() {
   const [isVoiceListening, setIsVoiceListening] = useState(false);
   const saveTimerRef = useRef(0);
   const titleInputRef = useRef(null);
+  const reminderAlertTimersRef = useRef(new Map());
   const speechRecognitionRef = useRef(null);
 
   useEffect(() => {
@@ -518,6 +520,42 @@ function App() {
   }, [attachmentPreview]);
 
   useEffect(() => {
+    return () => {
+      for (const timerId of reminderAlertTimersRef.current.values()) {
+        window.clearTimeout(timerId);
+      }
+
+      reminderAlertTimersRef.current.clear();
+    };
+  }, []);
+
+  useEffect(() => {
+    const activeAlertIds = new Set(reminderAlerts.map((alert) => alert.id));
+
+    for (const [alertId, timerId] of reminderAlertTimersRef.current.entries()) {
+      if (activeAlertIds.has(alertId)) {
+        continue;
+      }
+
+      window.clearTimeout(timerId);
+      reminderAlertTimersRef.current.delete(alertId);
+    }
+
+    for (const alert of reminderAlerts) {
+      if (reminderAlertTimersRef.current.has(alert.id)) {
+        continue;
+      }
+
+      const timerId = window.setTimeout(() => {
+        reminderAlertTimersRef.current.delete(alert.id);
+        setReminderAlerts((current) => current.filter((item) => item.id !== alert.id));
+      }, REMINDER_ALERT_AUTO_DISMISS_MS);
+
+      reminderAlertTimersRef.current.set(alert.id, timerId);
+    }
+  }, [reminderAlerts]);
+
+  useEffect(() => {
     if (!detailTaskId || attachmentPreview) {
       return;
     }
@@ -648,6 +686,13 @@ function App() {
   }
 
   function dismissReminderAlert(alertId) {
+    const timerId = reminderAlertTimersRef.current.get(alertId);
+
+    if (timerId) {
+      window.clearTimeout(timerId);
+      reminderAlertTimersRef.current.delete(alertId);
+    }
+
     setReminderAlerts((current) => current.filter((alert) => alert.id !== alertId));
   }
 
@@ -2636,7 +2681,7 @@ function TaskDetailDialog({ task, onAddToCalendar, onClose, onCopy, onEdit, onPr
           {reminderAt ? (
             <span>
               <Bell size={14} />
-              每{getReminderIntervalMinutes(task)}分钟提醒 · 从 {formatDateTime(reminderAt)} 开始
+              提前{getReminderIntervalMinutes(task)}分钟提醒 · 从 {formatDateTime(reminderAt)} 开始
             </span>
           ) : null}
           {task.owner ? <span>负责人：{task.owner}</span> : null}
@@ -2851,7 +2896,7 @@ function TaskRow({
           {reminderAt ? (
             <span>
               <Bell size={14} />
-              每{getReminderIntervalMinutes(task)}分钟提醒 · 从 {formatDateTime(reminderAt)} 开始
+              提前{getReminderIntervalMinutes(task)}分钟提醒 · 从 {formatDateTime(reminderAt)} 开始
             </span>
           ) : null}
           {task.owner ? <span>{task.owner}</span> : null}
