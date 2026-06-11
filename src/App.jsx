@@ -110,6 +110,7 @@ const viewOptions = [
 
 const cloudSyncEnabled = Boolean(import.meta.env.VITE_SHERLLY_API_URL);
 const REMINDER_ALERT_AUTO_DISMISS_MS = 5000;
+const CLOCK_TICK_MS = 60 * 1000;
 const visibleUpdateStates = new Set(["available", "downloading", "downloaded", "installing", "error"]);
 const imageMimeExtensions = {
   "image/apng": "apng",
@@ -308,10 +309,17 @@ function App() {
   const [mobileQuickText, setMobileQuickText] = useState("");
   const [mobileCaptureStatus, setMobileCaptureStatus] = useState("");
   const [isVoiceListening, setIsVoiceListening] = useState(false);
+  const [currentTime, setCurrentTime] = useState(() => new Date());
   const saveTimerRef = useRef(0);
   const titleInputRef = useRef(null);
   const reminderAlertTimersRef = useRef(new Map());
   const speechRecognitionRef = useRef(null);
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => setCurrentTime(new Date()), CLOCK_TICK_MS);
+
+    return () => window.clearInterval(intervalId);
+  }, []);
 
   useEffect(() => {
     let isCancelled = false;
@@ -600,15 +608,14 @@ function App() {
 
   const taskStats = useMemo(() => {
     const activeTasks = data.tasks.filter((task) => !["done", "cancelled"].includes(task.status));
-    const now = new Date();
 
     return {
       active: activeTasks.length,
-      overdue: activeTasks.filter((task) => isOverdue(task, now)).length,
+      overdue: activeTasks.filter((task) => isOverdue(task, currentTime)).length,
       waiting: data.tasks.filter((task) => task.status === "waiting").length,
       done: data.tasks.filter((task) => task.status === "done").length,
     };
-  }, [data.tasks]);
+  }, [currentTime, data.tasks]);
 
   const filteredTasks = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
@@ -647,15 +654,15 @@ function App() {
   }, [data.tasks, searchQuery, taskFilter]);
 
   const visibleLogs = useMemo(
-    () => filterLogsByRange(data.logs, logRange).slice().reverse(),
-    [data.logs, logRange],
+    () => filterLogsByRange(data.logs, logRange, currentTime).slice().reverse(),
+    [currentTime, data.logs, logRange],
   );
 
   const dailyReport = useMemo(
-    () => createDailyReport(data.tasks, data.logs, logRange),
-    [data.tasks, data.logs, logRange],
+    () => createDailyReport(data.tasks, data.logs, logRange, currentTime),
+    [currentTime, data.logs, data.tasks, logRange],
   );
-  const mobileFocusTasks = useMemo(() => getMobileFocusTasks(data.tasks), [data.tasks]);
+  const mobileFocusTasks = useMemo(() => getMobileFocusTasks(data.tasks, currentTime), [currentTime, data.tasks]);
   const detailTask = useMemo(
     () => data.tasks.find((task) => task.id === detailTaskId) || null,
     [data.tasks, detailTaskId],
@@ -862,7 +869,7 @@ function App() {
   }
 
   function completeMobileTask(task) {
-    const progress = getDailyProgress(task);
+    const progress = getDailyProgress(task, currentTime);
 
     if (progress.isScheduled) {
       completeTaskOnce(task);
@@ -1650,6 +1657,7 @@ function App() {
       <MobileHomePanel
         captureStatus={mobileCaptureStatus}
         isVoiceListening={isVoiceListening}
+        now={currentTime}
         onAddToCalendar={downloadTaskCalendar}
         onCompleteTask={completeMobileTask}
         onOpenFullBoard={() => setActiveView("tasks")}
@@ -1735,6 +1743,7 @@ function App() {
                       onCompleteOnce={completeTaskOnce}
                       onPreviewAttachment={previewAttachment}
                       onDelete={deleteTask}
+                      now={currentTime}
                     />
                   ))
                 )}
@@ -2064,6 +2073,7 @@ function App() {
           }}
           onAddToCalendar={downloadTaskCalendar}
           onPreviewAttachment={previewAttachment}
+          now={currentTime}
         />
       ) : null}
 
@@ -2323,6 +2333,7 @@ function EmptyState({ icon, text }) {
 function MobileHomePanel({
   captureStatus,
   isVoiceListening,
+  now,
   onAddToCalendar,
   onCompleteTask,
   onOpenFullBoard,
@@ -2334,7 +2345,7 @@ function MobileHomePanel({
   quickText,
   tasks,
 }) {
-  const overdueCount = tasks.filter((task) => isOverdue(task)).length;
+  const overdueCount = tasks.filter((task) => isOverdue(task, now)).length;
 
   return (
     <section className="mobile-home" aria-label="手机工作台">
@@ -2391,6 +2402,7 @@ function MobileHomePanel({
             <MobileTaskCard
               key={task.id}
               task={task}
+              now={now}
               onAddToCalendar={onAddToCalendar}
               onCompleteTask={onCompleteTask}
               onStartTask={onStartTask}
@@ -2403,10 +2415,10 @@ function MobileHomePanel({
   );
 }
 
-function MobileTaskCard({ task, onAddToCalendar, onCompleteTask, onStartTask, onViewTask }) {
+function MobileTaskCard({ task, now, onAddToCalendar, onCompleteTask, onStartTask, onViewTask }) {
   const priority = getPriorityMeta(task.priority);
   const status = getStatusMeta(task.status);
-  const dailyProgress = getDailyProgress(task);
+  const dailyProgress = getDailyProgress(task, now);
   const reminderAt = getTaskReminderAt(task);
 
   return (
@@ -2638,11 +2650,11 @@ function ReportTaskItem({ task, onPreviewAttachment, onViewTask }) {
   );
 }
 
-function TaskDetailDialog({ task, onAddToCalendar, onClose, onCopy, onEdit, onPreviewAttachment }) {
+function TaskDetailDialog({ task, now, onAddToCalendar, onClose, onCopy, onEdit, onPreviewAttachment }) {
   const attachments = normalizeAttachments(task.attachments);
   const priority = getPriorityMeta(task.priority);
   const status = getStatusMeta(task.status);
-  const dailyProgress = getDailyProgress(task);
+  const dailyProgress = getDailyProgress(task, now);
   const tags = Array.isArray(task.tags) ? task.tags : [];
   const reminderAt = getTaskReminderAt(task);
   const launchActionValue = normalizeLaunchAction(task.launchAction);
@@ -2843,6 +2855,7 @@ function AttachmentPreviewDialog({ preview, onClose, onOpen }) {
 
 function TaskRow({
   task,
+  now,
   onCopy,
   onEdit,
   onStatusChange,
@@ -2854,8 +2867,8 @@ function TaskRow({
   const priority = getPriorityMeta(task.priority);
   const status = getStatusMeta(task.status);
   const statusTone = taskStatuses.some((item) => item.value === task.status) ? task.status : "todo";
-  const overdue = isOverdue(task);
-  const dailyProgress = getDailyProgress(task);
+  const overdue = isOverdue(task, now);
+  const dailyProgress = getDailyProgress(task, now);
   const isScheduledTask = dailyProgress.isScheduled;
   const reminderAt = getTaskReminderAt(task);
   const taskAttachments = normalizeAttachments(task.attachments);
