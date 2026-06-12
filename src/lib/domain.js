@@ -25,6 +25,8 @@ export const dailySlots = [
   { value: "evening", label: "晚上", startHour: 18, endHour: 24 },
 ];
 
+const maxDailySlotReminderRecords = 120;
+
 export const launchActionTypes = [
   { value: "none", label: "不设置" },
   { value: "url", label: "打开网址" },
@@ -597,6 +599,7 @@ export function createTask(draft, now = new Date()) {
     dailySlots: dailySlotValues,
     dailyTarget: dailySlotValues.length,
     completionRecords: [],
+    dailySlotReminderRecords: [],
     priority: smartDraft.priority || "normal",
     status: smartDraft.status || "todo",
     tags: normalizeTags(smartDraft.tags),
@@ -685,6 +688,51 @@ export function getTaskCompletionsForDate(task, date = new Date()) {
   return records.filter((record) => getLocalDateKey(record.completedAt || record) === dateKey);
 }
 
+function getDailySlotReminderRecordDateKey(record) {
+  const time = getFiniteTime(record?.remindedAt || record);
+
+  return Number.isFinite(time) ? getLocalDateKey(time) : "";
+}
+
+function getDailySlotReminderRecordSlot(record) {
+  if (dailySlots.some((slot) => slot.value === record?.slot)) {
+    return record.slot;
+  }
+
+  const time = getFiniteTime(record?.remindedAt || record);
+
+  return Number.isFinite(time) ? getCurrentSlotValue(new Date(time)) : "";
+}
+
+export function normalizeDailySlotReminderRecords(records) {
+  if (!Array.isArray(records)) {
+    return [];
+  }
+
+  return records
+    .filter((record) => getDailySlotReminderRecordDateKey(record))
+    .slice(-maxDailySlotReminderRecords);
+}
+
+export function getTaskDailySlotRemindersForDate(task, date = new Date()) {
+  const dateKey = getLocalDateKey(date);
+  const records = normalizeDailySlotReminderRecords(task?.dailySlotReminderRecords);
+
+  return records.filter((record) => getDailySlotReminderRecordDateKey(record) === dateKey);
+}
+
+export function createDailySlotReminderRecord(task, slot, date = new Date()) {
+  return {
+    id: `${task?.id || "task"}_slot_reminder_${slot.value}_${date.getTime()}`,
+    remindedAt: date.toISOString(),
+    slot: slot.value,
+  };
+}
+
+export function getDailySlotReminderKey(task, slot, date = new Date()) {
+  return `${task?.id || "task"}:${slot.value}:${getLocalDateKey(date)}`;
+}
+
 export function getTaskDailySlots(task) {
   return normalizeDailySlots(task?.dailySlots, task?.dailyTarget);
 }
@@ -720,6 +768,7 @@ export function getDailyProgress(task, date = new Date()) {
   const done = slotStates.filter((slot) => slot.isDone).length;
   const missed = slotStates.filter((slot) => slot.isMissed).length;
   const available = slotStates.filter((slot) => slot.isAvailable).length;
+  const nextSlot = slotStates.find((slot) => !slot.isDone && !slot.isMissed) || null;
   const target = slots.length;
 
   return {
@@ -730,9 +779,34 @@ export function getDailyProgress(task, date = new Date()) {
     remaining: Math.max(target - done - missed, 0),
     isScheduled: target > 0,
     isReached: target > 0 && done >= target,
+    nextSlot,
     slotStates,
     currentSlotValue,
   };
+}
+
+export function getPendingDailySlotReminder(task, date = new Date()) {
+  if (!isActiveTask(task)) {
+    return null;
+  }
+
+  const progress = getDailyProgress(task, date);
+
+  if (!progress.isScheduled) {
+    return null;
+  }
+
+  const availableSlot = progress.slotStates.find((slot) => slot.isAvailable);
+
+  if (!availableSlot) {
+    return null;
+  }
+
+  const remindedSlots = new Set(
+    getTaskDailySlotRemindersForDate(task, date).map((record) => getDailySlotReminderRecordSlot(record)),
+  );
+
+  return remindedSlots.has(availableSlot.value) ? null : availableSlot;
 }
 
 export function shouldRemindTask(task, now = new Date()) {

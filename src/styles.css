@@ -847,6 +847,10 @@ button:disabled {
   font-weight: 800;
 }
 
+.daily-progress em.daily-progress-next {
+  color: var(--muted);
+}
+
 .daily-progress.is-complete {
   color: var(--success);
   background: #e6f3e9;

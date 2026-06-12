@@ -32,6 +32,7 @@ import {
 import {
   candidateToDraft,
   createLog,
+  createDailySlotReminderRecord,
   createTask,
   createId,
   dailySlots,
@@ -42,6 +43,8 @@ import {
   filterLogsByRange,
   formatDateTime,
   getDailyProgress,
+  getDailySlotReminderKey,
+  getPendingDailySlotReminder,
   getPriorityMeta,
   getReminderIntervalMinutes,
   getStatusMeta,
@@ -52,6 +55,7 @@ import {
   logRanges,
   normalizeLaunchAction,
   normalizeAttachments,
+  normalizeDailySlotReminderRecords,
   normalizeDailyTarget,
   normalizeDailySlots,
   priorities,
@@ -314,6 +318,7 @@ function App() {
   const titleInputRef = useRef(null);
   const reminderAlertTimersRef = useRef(new Map());
   const speechRecognitionRef = useRef(null);
+  const dailySlotReminderKeysRef = useRef(new Set());
 
   useEffect(() => {
     const intervalId = window.setInterval(() => setCurrentTime(new Date()), CLOCK_TICK_MS);
@@ -463,6 +468,7 @@ function App() {
       const now = new Date();
       const remindedTaskIds = [];
       const remindedCandidateIds = [];
+      const dailySlotRemindersByTaskId = new Map();
 
       for (const task of data.tasks) {
         if (shouldRemindTask(task, now)) {
@@ -475,6 +481,31 @@ function App() {
             flash: true,
           });
         }
+
+        const pendingSlotReminder = getPendingDailySlotReminder(task, now);
+
+        if (!pendingSlotReminder) {
+          continue;
+        }
+
+        const reminderKey = getDailySlotReminderKey(task, pendingSlotReminder, now);
+
+        if (dailySlotReminderKeysRef.current.has(reminderKey)) {
+          continue;
+        }
+
+        const reminderRecord = createDailySlotReminderRecord(task, pendingSlotReminder, now);
+        dailySlotReminderKeysRef.current.add(reminderKey);
+        dailySlotRemindersByTaskId.set(task.id, {
+          record: reminderRecord,
+        });
+        notifyWithFallback({
+          id: `daily_slot_${task.id}_${pendingSlotReminder.value}_${now.getTime()}`,
+          title: `${pendingSlotReminder.label}任务提醒`,
+          body: `${task.title} · 该完成这一次了`,
+          sound: data.settings.soundEnabled,
+          flash: true,
+        });
       }
 
       for (const candidate of data.candidates) {
@@ -490,15 +521,33 @@ function App() {
         }
       }
 
-      if (remindedTaskIds.length === 0 && remindedCandidateIds.length === 0) {
+      if (remindedTaskIds.length === 0 && remindedCandidateIds.length === 0 && dailySlotRemindersByTaskId.size === 0) {
         return;
       }
 
       setData((current) => ({
         ...current,
-        tasks: current.tasks.map((task) =>
-          remindedTaskIds.includes(task.id) ? { ...task, lastRemindedAt: now.toISOString() } : task,
-        ),
+        tasks: current.tasks.map((task) => {
+          const dailySlotReminder = dailySlotRemindersByTaskId.get(task.id);
+          const taskWithDueReminder = remindedTaskIds.includes(task.id)
+            ? { ...task, lastRemindedAt: now.toISOString() }
+            : task;
+
+          if (!dailySlotReminder) {
+            return taskWithDueReminder;
+          }
+
+          return {
+            ...taskWithDueReminder,
+            dailySlotReminderRecords: normalizeDailySlotReminderRecords([
+              ...(Array.isArray(taskWithDueReminder.dailySlotReminderRecords)
+                ? taskWithDueReminder.dailySlotReminderRecords
+                : []),
+              dailySlotReminder.record,
+            ]),
+            updatedAt: now.toISOString(),
+          };
+        }),
         candidates: current.candidates.map((candidate) =>
           remindedCandidateIds.includes(candidate.id)
             ? { ...candidate, remindedAt: now.toISOString() }
@@ -2311,6 +2360,33 @@ function UpdateBanner({ isBusy, onDismiss, onDownload, onRetry, status }) {
   );
 }
 
+function formatSlotStartTime(slot) {
+  return `${String(slot.startHour).padStart(2, "0")}:00`;
+}
+
+function getDailyProgressNextHint(progress) {
+  if (progress.available > 0 || progress.isReached || !progress.nextSlot) {
+    return "";
+  }
+
+  return `下次 ${progress.nextSlot.label} ${formatSlotStartTime(progress.nextSlot)}`;
+}
+
+function DailyProgressBadge({ progress }) {
+  const nextHint = getDailyProgressNextHint(progress);
+
+  return (
+    <div className={`daily-progress ${progress.isReached ? "is-complete" : ""}`}>
+      <span>今日进度</span>
+      <strong>
+        {progress.done}/{progress.target}
+      </strong>
+      {progress.missed > 0 ? <em>错过 {progress.missed}</em> : null}
+      {nextHint ? <em className="daily-progress-next">{nextHint}</em> : null}
+    </div>
+  );
+}
+
 function Metric({ icon, label, value, tone = "default" }) {
   return (
     <article className={`metric-card tone-${tone}`}>
@@ -2444,13 +2520,7 @@ function MobileTaskCard({ task, now, onAddToCalendar, onCompleteTask, onStartTas
         {task.owner ? <span>{task.owner}</span> : null}
       </div>
       {dailyProgress.isScheduled ? (
-        <div className={`daily-progress ${dailyProgress.isReached ? "is-complete" : ""}`}>
-          <span>今日进度</span>
-          <strong>
-            {dailyProgress.done}/{dailyProgress.target}
-          </strong>
-          {dailyProgress.missed > 0 ? <em>错过 {dailyProgress.missed}</em> : null}
-        </div>
+        <DailyProgressBadge progress={dailyProgress} />
       ) : null}
       <div className="mobile-task-actions">
         <button type="button" onClick={() => onStartTask(task)}>
@@ -2707,13 +2777,7 @@ function TaskDetailDialog({ task, now, onAddToCalendar, onClose, onCopy, onEdit,
 
         {dailyProgress.isScheduled ? (
           <>
-            <div className={`daily-progress ${dailyProgress.isReached ? "is-complete" : ""}`}>
-              <span>今日进度</span>
-              <strong>
-                {dailyProgress.done}/{dailyProgress.target}
-              </strong>
-              {dailyProgress.missed > 0 ? <em>错过 {dailyProgress.missed}</em> : null}
-            </div>
+            <DailyProgressBadge progress={dailyProgress} />
             <div className="slot-state-list">
               {dailyProgress.slotStates.map((slot) => (
                 <span
@@ -2916,13 +2980,7 @@ function TaskRow({
         </div>
         {isScheduledTask ? (
           <>
-            <div className={`daily-progress ${dailyProgress.isReached ? "is-complete" : ""}`}>
-              <span>今日进度</span>
-              <strong>
-                {dailyProgress.done}/{dailyProgress.target}
-              </strong>
-              {dailyProgress.missed > 0 ? <em>错过 {dailyProgress.missed}</em> : null}
-            </div>
+            <DailyProgressBadge progress={dailyProgress} />
             <div className="slot-state-list">
               {dailyProgress.slotStates.map((slot) => (
                 <span
