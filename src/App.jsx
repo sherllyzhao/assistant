@@ -1368,17 +1368,19 @@ function App() {
   }
 
   function changeTaskStatus(task, status) {
+    const now = new Date();
     const updatedTask = {
       ...task,
       status,
-      updatedAt: new Date().toISOString(),
+      completedAt: status === "done" ? task.completedAt || now.toISOString() : "",
+      updatedAt: now.toISOString(),
     };
     const action = status === "done" ? "完成任务" : status === "cancelled" ? "删除任务" : "修改任务";
 
     setData((current) => ({
       ...current,
       tasks: current.tasks.map((item) => (item.id === task.id ? updatedTask : item)),
-      logs: [...current.logs, createLog(action, updatedTask, `状态变更为${getStatusMeta(status).label}`)],
+      logs: [...current.logs, createLog(action, updatedTask, `状态变更为${getStatusMeta(status).label}`, now)],
     }));
   }
 

@@ -578,6 +578,7 @@ export function normalizeAttachments(value) {
 export function createTask(draft, now = new Date()) {
   const smartDraft = applyTaskIntelligence(draft, now);
   const title = String(smartDraft.title || "").trim();
+  const createdAt = now.toISOString();
 
   if (!title) {
     throw new Error("任务标题不能为空");
@@ -593,8 +594,8 @@ export function createTask(draft, now = new Date()) {
     title,
     source: String(smartDraft.source || "手动录入").trim(),
     owner: String(smartDraft.owner || "").trim(),
-    createdAt: now.toISOString(),
-    updatedAt: now.toISOString(),
+    createdAt,
+    updatedAt: createdAt,
     dueAt: smartDraft.dueAt ? new Date(smartDraft.dueAt).toISOString() : "",
     dailySlots: dailySlotValues,
     dailyTarget: dailySlotValues.length,
@@ -602,6 +603,7 @@ export function createTask(draft, now = new Date()) {
     dailySlotReminderRecords: [],
     priority: smartDraft.priority || "normal",
     status: smartDraft.status || "todo",
+    completedAt: smartDraft.status === "done" ? createdAt : "",
     tags: normalizeTags(smartDraft.tags),
     note: String(smartDraft.note || "").trim(),
     launchAction: normalizeLaunchAction(smartDraft.launchAction),
@@ -810,18 +812,19 @@ export function getPendingDailySlotReminder(task, date = new Date()) {
 }
 
 export function shouldRemindTask(task, now = new Date()) {
-  if (!task?.dueAt || !isActiveTask(task)) {
+  if (!isActiveTask(task)) {
     return false;
   }
 
-  const dueTime = getFiniteTime(task.dueAt);
-  const reminderStartTime = getFiniteTime(getTaskReminderAt(task));
   const reminderInterval = getReminderIntervalMinutes(task) * 60 * 1000;
+  const fallbackStartTime = getFiniteTime(task?.createdAt || task?.updatedAt);
+  const reminderStartTime = task?.dueAt
+    ? getFiniteTime(getTaskReminderAt(task))
+    : fallbackStartTime + reminderInterval;
   const lastRemindedTime = task.lastRemindedAt ? getFiniteTime(task.lastRemindedAt) : 0;
   const nowTime = now.getTime();
 
   if (
-    !Number.isFinite(dueTime) ||
     !Number.isFinite(reminderStartTime) ||
     !Number.isFinite(reminderInterval) ||
     reminderInterval <= 0
@@ -927,7 +930,24 @@ export function filterLogsByRange(logs, range, now = new Date()) {
 export function createDailyReport(tasks, logs, range = "today", now = new Date()) {
   const scopedLogs = filterLogsByRange(logs, range, now);
   const activeTasks = tasks.filter((task) => isActiveTask(task));
-  const completedTasks = tasks.filter((task) => task.status === "done");
+  const todayKey = getLocalDateKey(now);
+  const todayCompletedTaskIds = new Set(
+    logs
+      .filter((log) => log.action === "完成任务" && getLocalDateKey(log.createdAt) === todayKey)
+      .map((log) => log.taskId)
+      .filter(Boolean),
+  );
+  const completedTasks = tasks.filter((task) => {
+    const completedAtTime = task?.completedAt ? getFiniteTime(task.completedAt) : NaN;
+
+    return (
+      todayCompletedTaskIds.has(task.id) ||
+      getTaskCompletionsForDate(task, now).length > 0 ||
+      (task.status === "done" &&
+        Number.isFinite(completedAtTime) &&
+        getLocalDateKey(completedAtTime) === todayKey)
+    );
+  });
   const waitingTasks = tasks.filter((task) => task.status === "waiting");
   const overdueTasks = activeTasks.filter((task) => isOverdue(task, now));
   const missedTasks = activeTasks
