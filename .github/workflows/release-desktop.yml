@@ -139,7 +139,7 @@ jobs:
           renderer_url="${SHERLLY_RENDERER_URL:-}"
 
           if [ -z "$renderer_url" ]; then
-            renderer_url="https://${GITHUB_REPOSITORY_OWNER}.github.io/${GITHUB_REPOSITORY#*/}/"
+            renderer_url="https://sherllyzhao.github.io/assistant/"
           fi
 
           echo "SHERLLY_RENDERER_URL=$renderer_url" >> "$GITHUB_ENV"

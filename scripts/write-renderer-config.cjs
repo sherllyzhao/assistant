@@ -4,6 +4,7 @@ const path = require("node:path");
 const appRoot = path.join(__dirname, "..");
 const configPath = path.join(appRoot, "electron", "renderer-config.json");
 const requireRendererUrl = process.argv.includes("--require-url");
+const defaultProductionRendererUrl = "https://sherllyzhao.github.io/assistant/";
 
 require("dotenv").config({ path: path.join(appRoot, ".env"), quiet: true });
 
@@ -31,7 +32,7 @@ function normalizeRendererUrl(value) {
 }
 
 const productionRendererUrl = normalizeRendererUrl(
-  process.env.SHERLLY_RENDERER_URL || process.env.ELECTRON_RENDERER_URL || "",
+  process.env.SHERLLY_RENDERER_URL || process.env.ELECTRON_RENDERER_URL || defaultProductionRendererUrl,
 );
 
 if (requireRendererUrl && !productionRendererUrl) {
@@ -40,7 +41,7 @@ if (requireRendererUrl && !productionRendererUrl) {
       "SHERLLY_RENDERER_URL is required for desktop release builds.",
       "Set it in GitHub repository Settings > Secrets and variables > Actions > Variables.",
       "Name: SHERLLY_RENDERER_URL",
-      "Value: https://your-frontend-domain",
+      `Value: ${defaultProductionRendererUrl}`,
     ].join("\n"),
   );
   process.exit(1);

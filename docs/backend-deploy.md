@@ -144,7 +144,7 @@ npm run pack:win
 仓库已提供 `.github/workflows/deploy-frontend.yml`，默认把前端部署到 GitHub Pages。当前仓库的默认前端地址是：
 
 ```text
-https://sherllyzhao.github.io/--/
+https://sherllyzhao.github.io/assistant/
 ```
 
 ## GitHub Releases 自动发布安装包
@@ -157,7 +157,7 @@ https://sherllyzhao.github.io/--/
 - Repository variable `VITE_SHERLLY_API_URL`：线上后台 API 地址，用作安装包内置页面的回退配置。
 - Repository secret `VITE_SHERLLY_API_TOKEN`：和后台 `SHERLLY_API_TOKEN` 一致。
 
-`SHERLLY_RENDERER_URL` 是桌面端远程页面地址。如果这个变量没配，GitHub Actions 会自动使用当前仓库的 GitHub Pages 地址：`https://sherllyzhao.github.io/--/`。如果你以后换到 Cloudflare Pages / Vercel / 自定义域名，再把 `SHERLLY_RENDERER_URL` 改成新地址即可。
+`SHERLLY_RENDERER_URL` 是桌面端远程页面地址。如果这个变量没配，GitHub Actions 会自动使用当前仓库的 GitHub Pages 地址：`https://sherllyzhao.github.io/assistant/`。如果你以后换到 Cloudflare Pages / Vercel / 自定义域名，再把 `SHERLLY_RENDERER_URL` 改成新地址即可。
 
 `VITE_SHERLLY_API_URL` 和 `VITE_SHERLLY_API_TOKEN` 决定前端是否启用云同步。GitHub Actions 会在前端部署和安装包构建前检查这两个值；缺少时会直接失败，避免发出只能使用空本地数据的页面或安装包。
 
