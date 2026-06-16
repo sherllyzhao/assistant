@@ -26,6 +26,8 @@ export const dailySlots = [
 ];
 
 const maxDailySlotReminderRecords = 120;
+const staleTaskThresholdDays = 14;
+const mergeableSimilarityThreshold = 0.72;
 
 export const launchActionTypes = [
   { value: "none", label: "不设置" },
@@ -925,6 +927,231 @@ export function filterLogsByRange(logs, range, now = new Date()) {
   }
 
   return logs.filter((log) => new Date(log.createdAt).getTime() >= start.getTime());
+}
+
+function normalizeTaskTitleExactKey(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[【】"'“”‘’、，,。.!！?？:：;；()[\]（）<>《》\s]/g, "")
+    .trim();
+}
+
+function normalizeTaskTitleForOrganizing(value) {
+  return normalizeTaskTitleExactKey(value)
+    .replace(/^(请|帮我|麻烦|记得|提醒我|需要|处理|跟进|确认|发送|发|提交|完成|做一下)/, "")
+    .replace(/(一下|下|这个|这件事|事项|任务)$/g, "")
+    .trim();
+}
+
+function tokenizeTaskTitle(value) {
+  const normalized = normalizeTaskTitleForOrganizing(value);
+  const tokens = new Set();
+
+  for (const match of normalized.matchAll(/[\u4e00-\u9fa5]{2,}|[a-z0-9]{2,}/gi)) {
+    const token = match[0];
+
+    if (token.length <= 8) {
+      tokens.add(token);
+      continue;
+    }
+
+    for (let index = 0; index <= token.length - 2; index += 1) {
+      tokens.add(token.slice(index, index + 2));
+    }
+  }
+
+  if (tokens.size === 0 && normalized) {
+    tokens.add(normalized);
+  }
+
+  return tokens;
+}
+
+function getTitleSimilarity(left, right) {
+  const leftExactKey = normalizeTaskTitleExactKey(left);
+  const rightExactKey = normalizeTaskTitleExactKey(right);
+
+  if (leftExactKey && leftExactKey === rightExactKey) {
+    return 1;
+  }
+
+  const leftKey = normalizeTaskTitleForOrganizing(left);
+  const rightKey = normalizeTaskTitleForOrganizing(right);
+
+  if (!leftKey || !rightKey) {
+    return 0;
+  }
+
+  if (leftKey === rightKey) {
+    return 0.92;
+  }
+
+  if (leftKey.includes(rightKey) || rightKey.includes(leftKey)) {
+    return Math.min(leftKey.length, rightKey.length) / Math.max(leftKey.length, rightKey.length);
+  }
+
+  const leftTokens = tokenizeTaskTitle(leftKey);
+  const rightTokens = tokenizeTaskTitle(rightKey);
+  const intersectionSize = [...leftTokens].filter((token) => rightTokens.has(token)).length;
+  const unionSize = new Set([...leftTokens, ...rightTokens]).size;
+
+  return unionSize > 0 ? intersectionSize / unionSize : 0;
+}
+
+function getTaskStaleDays(task, now) {
+  const timestamps = [task?.updatedAt, task?.createdAt, task?.lastRemindedAt]
+    .map((value) => getFiniteTime(value))
+    .filter(Number.isFinite);
+  const latestTime = timestamps.length > 0 ? Math.max(...timestamps) : NaN;
+
+  if (!Number.isFinite(latestTime)) {
+    return 0;
+  }
+
+  return Math.floor((now.getTime() - latestTime) / (24 * 60 * 60 * 1000));
+}
+
+function getSuggestionTaskSummary(task) {
+  return {
+    id: task.id,
+    title: task.title || "",
+    status: task.status || "todo",
+    priority: task.priority || "normal",
+    dueAt: task.dueAt || "",
+    owner: task.owner || "",
+  };
+}
+
+function getPrimaryMergeTask(tasks) {
+  const priorityScore = { high: 0, normal: 1, low: 2 };
+
+  return tasks
+    .slice()
+    .sort((a, b) => {
+      const priorityDelta = (priorityScore[a.priority] ?? 1) - (priorityScore[b.priority] ?? 1);
+
+      if (priorityDelta !== 0) {
+        return priorityDelta;
+      }
+
+      const dueA = a.dueAt ? getFiniteTime(a.dueAt) : Number.MAX_SAFE_INTEGER;
+      const dueB = b.dueAt ? getFiniteTime(b.dueAt) : Number.MAX_SAFE_INTEGER;
+      const dueSortA = Number.isFinite(dueA) ? dueA : Number.MAX_SAFE_INTEGER;
+      const dueSortB = Number.isFinite(dueB) ? dueB : Number.MAX_SAFE_INTEGER;
+
+      if (dueSortA !== dueSortB) {
+        return dueSortA - dueSortB;
+      }
+
+      const updatedA = getFiniteTime(a.updatedAt || a.createdAt);
+      const updatedB = getFiniteTime(b.updatedAt || b.createdAt);
+
+      return (Number.isFinite(updatedB) ? updatedB : 0) - (Number.isFinite(updatedA) ? updatedA : 0);
+    })[0];
+}
+
+export function createTaskOrganizingSuggestions(tasks, now = new Date()) {
+  const activeTasks = (Array.isArray(tasks) ? tasks : []).filter((task) => task?.id && isActiveTask(task));
+  const duplicateGroups = [];
+  const similarGroups = [];
+  const staleTasks = [];
+  const usedSimilarTaskIds = new Set();
+  const tasksByExactTitle = new Map();
+
+  for (const task of activeTasks) {
+    const key = normalizeTaskTitleExactKey(task.title);
+
+    if (key.length >= 2) {
+      tasksByExactTitle.set(key, [...(tasksByExactTitle.get(key) || []), task]);
+    }
+
+    const staleDays = getTaskStaleDays(task, now);
+
+    if (staleDays >= staleTaskThresholdDays) {
+      staleTasks.push({
+        task: getSuggestionTaskSummary(task),
+        days: staleDays,
+        reason: `${staleDays} 天没有更新，建议确认是否继续推进。`,
+      });
+    }
+  }
+
+  for (const group of tasksByExactTitle.values()) {
+    if (group.length < 2) {
+      continue;
+    }
+
+    const primaryTask = getPrimaryMergeTask(group);
+    const duplicateTasks = group.filter((task) => task.id !== primaryTask.id);
+
+    duplicateGroups.push({
+      id: `duplicate:${primaryTask.id}:${duplicateTasks.map((task) => task.id).join(":")}`,
+      primaryTask: getSuggestionTaskSummary(primaryTask),
+      tasks: group.map(getSuggestionTaskSummary),
+      duplicateTaskIds: duplicateTasks.map((task) => task.id),
+      reason: "标题几乎完全一致，建议保留一条主任务，其他任务标记为已取消。",
+    });
+
+    for (const task of group) {
+      usedSimilarTaskIds.add(task.id);
+    }
+  }
+
+  for (let leftIndex = 0; leftIndex < activeTasks.length; leftIndex += 1) {
+    const leftTask = activeTasks[leftIndex];
+
+    if (usedSimilarTaskIds.has(leftTask.id)) {
+      continue;
+    }
+
+    const group = [leftTask];
+
+    for (let rightIndex = leftIndex + 1; rightIndex < activeTasks.length; rightIndex += 1) {
+      const rightTask = activeTasks[rightIndex];
+
+      if (usedSimilarTaskIds.has(rightTask.id)) {
+        continue;
+      }
+
+      const similarity = getTitleSimilarity(leftTask.title, rightTask.title);
+
+      if (similarity >= mergeableSimilarityThreshold && similarity < 1) {
+        group.push(rightTask);
+      }
+    }
+
+    if (group.length < 2) {
+      continue;
+    }
+
+    const primaryTask = getPrimaryMergeTask(group);
+    const mergeTaskIds = group.filter((task) => task.id !== primaryTask.id).map((task) => task.id);
+
+    similarGroups.push({
+      id: `similar:${primaryTask.id}:${mergeTaskIds.join(":")}`,
+      primaryTask: getSuggestionTaskSummary(primaryTask),
+      tasks: group.map(getSuggestionTaskSummary),
+      mergeTaskIds,
+      reason: "标题高度相似，建议合并上下文后只保留一条主任务。",
+    });
+
+    for (const task of group) {
+      usedSimilarTaskIds.add(task.id);
+    }
+  }
+
+  return {
+    generatedAt: now.toISOString(),
+    thresholds: {
+      staleDays: staleTaskThresholdDays,
+      similarity: mergeableSimilarityThreshold,
+    },
+    duplicateGroups: duplicateGroups.slice(0, 6),
+    similarGroups: similarGroups.slice(0, 6),
+    staleTasks: staleTasks
+      .sort((a, b) => b.days - a.days)
+      .slice(0, 8),
+  };
 }
 
 export function createDailyReport(tasks, logs, range = "today", now = new Date()) {

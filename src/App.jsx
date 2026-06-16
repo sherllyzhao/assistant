@@ -25,6 +25,7 @@ import {
   Search,
   Trash2,
   UserRound,
+  Wand2,
   Volume2,
   VolumeX,
   X,
@@ -39,6 +40,7 @@ import {
   detectCandidatesFromText,
   createDailyReport,
   createAttachment,
+  createTaskOrganizingSuggestions,
   emptyTaskDraft,
   filterLogsByRange,
   formatDateTime,
@@ -710,6 +712,10 @@ function App() {
   const dailyReport = useMemo(
     () => createDailyReport(data.tasks, data.logs, logRange, currentTime),
     [currentTime, data.logs, data.tasks, logRange],
+  );
+  const organizingSuggestions = useMemo(
+    () => createTaskOrganizingSuggestions(data.tasks, currentTime),
+    [currentTime, data.tasks],
   );
   const mobileFocusTasks = useMemo(() => getMobileFocusTasks(data.tasks, currentTime), [currentTime, data.tasks]);
   const detailTask = useMemo(
@@ -1495,6 +1501,143 @@ function App() {
     }
   }
 
+  function cancelDuplicateTasks(group) {
+    const duplicateIds = new Set(group.duplicateTaskIds || []);
+
+    if (duplicateIds.size === 0) {
+      return;
+    }
+
+    const now = new Date();
+
+    setData((current) => {
+      const cancelledTasks = [];
+      const tasks = current.tasks.map((task) => {
+        if (!duplicateIds.has(task.id) || !isActiveTask(task)) {
+          return task;
+        }
+
+        const updatedTask = {
+          ...task,
+          status: "cancelled",
+          updatedAt: now.toISOString(),
+        };
+        cancelledTasks.push(updatedTask);
+        return updatedTask;
+      });
+
+      if (cancelledTasks.length === 0) {
+        return current;
+      }
+
+      return {
+        ...current,
+        tasks,
+        logs: [
+          ...current.logs,
+          ...cancelledTasks.map((task) =>
+            createLog("修改任务", task, `AI整理：与「${group.primaryTask.title}」重复，已标记为已取消`, now),
+          ),
+        ],
+      };
+    });
+  }
+
+  function mergeSimilarTasks(group) {
+    const mergeIds = new Set(group.mergeTaskIds || []);
+
+    if (mergeIds.size === 0) {
+      return;
+    }
+
+    const now = new Date();
+
+    setData((current) => {
+      let primaryTask = null;
+      const mergedTasks = [];
+      const sourceTasks = current.tasks.filter((task) => mergeIds.has(task.id) && isActiveTask(task));
+
+      if (sourceTasks.length === 0) {
+        return current;
+      }
+
+      const sourceTaskNotes = sourceTasks
+        .map((task) => `- ${task.title}${task.note ? `：${task.note}` : ""}`)
+        .join("\n");
+      const tasks = current.tasks.map((task) => {
+        if (task.id === group.primaryTask.id) {
+          const existingNote = String(task.note || "").trim();
+          primaryTask = {
+            ...task,
+            note: [existingNote, `AI整理合并：\n${sourceTaskNotes}`].filter(Boolean).join("\n\n"),
+            tags: Array.from(new Set([...(Array.isArray(task.tags) ? task.tags : []), "已整理"])),
+            updatedAt: now.toISOString(),
+          };
+          return primaryTask;
+        }
+
+        if (mergeIds.has(task.id) && isActiveTask(task)) {
+          const updatedTask = {
+            ...task,
+            status: "cancelled",
+            updatedAt: now.toISOString(),
+          };
+          mergedTasks.push(updatedTask);
+          return updatedTask;
+        }
+
+        return task;
+      });
+
+      if (!primaryTask || mergedTasks.length === 0) {
+        return current;
+      }
+
+      return {
+        ...current,
+        tasks,
+        logs: [
+          ...current.logs,
+          createLog("修改任务", primaryTask, `AI整理：合并 ${mergedTasks.length} 条相似任务到备注`, now),
+          ...mergedTasks.map((task) =>
+            createLog("修改任务", task, `AI整理：已合并到「${primaryTask.title}」并标记为已取消`, now),
+          ),
+        ],
+      };
+    });
+  }
+
+  function markStaleTask(taskSummary) {
+    const now = new Date();
+
+    setData((current) => {
+      let updatedTask = null;
+      const tasks = current.tasks.map((task) => {
+        if (task.id !== taskSummary.id || !isActiveTask(task)) {
+          return task;
+        }
+
+        updatedTask = {
+          ...task,
+          priority: "low",
+          tags: Array.from(new Set([...(Array.isArray(task.tags) ? task.tags : []), "长期未完成"])),
+          updatedAt: now.toISOString(),
+        };
+        return updatedTask;
+      });
+
+      if (!updatedTask) {
+        return current;
+      }
+
+      return {
+        ...current,
+        tasks,
+        logs: [...current.logs, createLog("修改任务", updatedTask, "AI整理：标记为长期未完成并降为低优先级", now)],
+      };
+    });
+  }
+
   function detectWechatTasks() {
     const detected = detectCandidatesFromText(wechatText);
 
@@ -1813,9 +1956,13 @@ function App() {
             <ReportPanel
               dailyReport={dailyReport}
               logRange={logRange}
+              onCancelDuplicateTasks={cancelDuplicateTasks}
+              onMarkStaleTask={markStaleTask}
+              onMergeSimilarTasks={mergeSimilarTasks}
               onLogRangeChange={setLogRange}
               onPreviewAttachment={previewAttachment}
               onViewTask={(task) => setDetailTaskId(task.id)}
+              organizingSuggestions={organizingSuggestions}
               visibleLogs={visibleLogs}
             />
           )}
@@ -2552,9 +2699,13 @@ function ReportPanel({
   dailyReport,
   visibleLogs,
   logRange,
+  onCancelDuplicateTasks,
   onLogRangeChange,
+  onMarkStaleTask,
+  onMergeSimilarTasks,
   onPreviewAttachment,
   onViewTask,
+  organizingSuggestions,
 }) {
   return (
     <div className="report-panel">
@@ -2636,6 +2787,14 @@ function ReportPanel({
         </div>
       </div>
 
+      <OrganizingPanel
+        onCancelDuplicateTasks={onCancelDuplicateTasks}
+        onMarkStaleTask={onMarkStaleTask}
+        onMergeSimilarTasks={onMergeSimilarTasks}
+        onViewTask={onViewTask}
+        suggestions={organizingSuggestions}
+      />
+
       <h3 className="log-title">日志明细</h3>
       <div className="log-list">
         {visibleLogs.length === 0 ? (
@@ -2651,6 +2810,122 @@ function ReportPanel({
         )}
       </div>
     </div>
+  );
+}
+
+function OrganizingPanel({
+  onCancelDuplicateTasks,
+  onMarkStaleTask,
+  onMergeSimilarTasks,
+  onViewTask,
+  suggestions,
+}) {
+  const duplicateGroups = suggestions?.duplicateGroups || [];
+  const similarGroups = suggestions?.similarGroups || [];
+  const staleTasks = suggestions?.staleTasks || [];
+  const suggestionCount = duplicateGroups.length + similarGroups.length + staleTasks.length;
+
+  return (
+    <section className="organizing-panel" aria-label="AI任务整理">
+      <div className="organizing-heading">
+        <div>
+          <p className="eyebrow">AI Organize</p>
+          <h3>AI任务整理</h3>
+        </div>
+        <span>{suggestionCount > 0 ? `${suggestionCount} 条建议` : "今日清爽"}</span>
+      </div>
+
+      {suggestionCount === 0 ? (
+        <EmptyState icon={<Wand2 size={22} />} text="没有发现重复、相似或长期未完成任务" />
+      ) : (
+        <div className="organizing-list">
+          {duplicateGroups.map((group) => (
+            <OrganizingGroupCard
+              actionLabel="取消重复项"
+              key={group.id}
+              kind="重复任务"
+              onApply={() => onCancelDuplicateTasks(group)}
+              onViewTask={onViewTask}
+              reason={group.reason}
+              tasks={group.tasks}
+            />
+          ))}
+
+          {similarGroups.map((group) => (
+            <OrganizingGroupCard
+              actionLabel="合并到主任务"
+              key={group.id}
+              kind="相似任务"
+              onApply={() => onMergeSimilarTasks(group)}
+              onViewTask={onViewTask}
+              reason={group.reason}
+              tasks={group.tasks}
+            />
+          ))}
+
+          {staleTasks.map((item) => (
+            <OrganizingStaleCard
+              item={item}
+              key={item.task.id}
+              onApply={() => onMarkStaleTask(item.task)}
+              onViewTask={onViewTask}
+            />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function OrganizingTaskButton({ onViewTask, task }) {
+  const status = getStatusMeta(task.status);
+  const priority = getPriorityMeta(task.priority);
+
+  return (
+    <button className="organizing-task" type="button" onClick={() => onViewTask(task)} title={`查看详情：${task.title}`}>
+      <span>{task.title}</span>
+      <em>
+        {status.label} · {priority.label}
+      </em>
+    </button>
+  );
+}
+
+function OrganizingGroupCard({ actionLabel, kind, onApply, onViewTask, reason, tasks }) {
+  return (
+    <article className="organizing-card">
+      <div className="organizing-card-heading">
+        <strong>{kind}</strong>
+        <span>{tasks.length} 条</span>
+      </div>
+      <p>{reason}</p>
+      <div className="organizing-task-list">
+        {tasks.map((task) => (
+          <OrganizingTaskButton key={task.id} onViewTask={onViewTask} task={task} />
+        ))}
+      </div>
+      <button className="secondary-button" type="button" onClick={onApply}>
+        <Wand2 size={16} />
+        {actionLabel}
+      </button>
+    </article>
+  );
+}
+
+function OrganizingStaleCard({ item, onApply, onViewTask }) {
+  return (
+    <article className="organizing-card stale">
+      <div className="organizing-card-heading">
+        <strong>长期未完成</strong>
+        <span>{item.days} 天</span>
+      </div>
+      <p>{item.reason}</p>
+      <OrganizingTaskButton onViewTask={onViewTask} task={item.task} />
+      <button className="secondary-button" type="button" onClick={onApply}>
+        <Wand2 size={16} />
+        标记长期未完成
+      </button>
+    </article>
   );
 }
 

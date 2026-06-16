@@ -1483,6 +1483,117 @@ textarea:focus {
   white-space: nowrap;
 }
 
+.organizing-panel {
+  display: grid;
+  gap: 12px;
+  margin: 0 0 18px;
+  padding: 14px;
+  background:
+    linear-gradient(135deg, rgba(18, 113, 95, 0.09), rgba(234, 183, 74, 0.1)),
+    var(--surface);
+  border: 1px solid rgba(18, 113, 95, 0.18);
+  border-radius: 8px;
+}
+
+.organizing-heading,
+.organizing-card-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.organizing-heading h3 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.organizing-heading > span,
+.organizing-card-heading span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 0 9px;
+  color: var(--accent-strong);
+  background: var(--accent-soft);
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.organizing-list {
+  display: grid;
+  gap: 10px;
+}
+
+.organizing-card {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.organizing-card.stale {
+  border-color: rgba(201, 71, 56, 0.2);
+}
+
+.organizing-card-heading strong {
+  font-size: 14px;
+}
+
+.organizing-card p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.organizing-task-list {
+  display: grid;
+  gap: 7px;
+}
+
+.organizing-task {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  min-height: 0;
+  padding: 9px 10px;
+  color: var(--ink);
+  text-align: left;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.organizing-task:hover,
+.organizing-task:focus-visible {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(18, 113, 95, 0.1);
+}
+
+.organizing-task span {
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.organizing-task em {
+  color: var(--muted);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 800;
+}
+
+.organizing-card > .secondary-button {
+  width: fit-content;
+  min-height: 34px;
+}
+
 .log-title {
   margin: 16px 0 10px;
   font-size: 15px;
@@ -2165,9 +2276,19 @@ textarea:focus {
   .panel,
   .profile-card,
   .report-card,
-  .report-section {
+  .report-section,
+  .organizing-panel {
     padding: 12px;
     box-shadow: 0 8px 18px rgba(25, 45, 38, 0.05);
+  }
+
+  .organizing-heading,
+  .organizing-card-heading {
+    align-items: flex-start;
+  }
+
+  .organizing-card > .secondary-button {
+    width: 100%;
   }
 
   .section-toolbar,
