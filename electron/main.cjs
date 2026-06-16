@@ -45,6 +45,7 @@ const defaultData = {
   tasks: [],
   candidates: [],
   logs: [],
+  vaultItems: [],
   settings: {
     soundEnabled: true,
   },
@@ -81,6 +82,7 @@ function normalizeData(data) {
     tasks: Array.isArray(data?.tasks) ? data.tasks : [],
     candidates: Array.isArray(data?.candidates) ? data.candidates : [],
     logs: Array.isArray(data?.logs) ? data.logs : [],
+    vaultItems: Array.isArray(data?.vaultItems) ? data.vaultItems : [],
     settings: {
       ...defaultData.settings,
       ...(data?.settings && typeof data.settings === "object" ? data.settings : {}),
@@ -89,7 +91,7 @@ function normalizeData(data) {
 }
 
 function hasMeaningfulData(data) {
-  return data.tasks.length > 0 || data.candidates.length > 0 || data.logs.length > 0;
+  return data.tasks.length > 0 || data.candidates.length > 0 || data.logs.length > 0 || data.vaultItems.length > 0;
 }
 
 function getItemTimestamp(item) {
@@ -128,6 +130,7 @@ function mergeData(currentData, nextData) {
     tasks: mergeItems(current.tasks, next.tasks),
     candidates: mergeItems(current.candidates, next.candidates),
     logs: mergeItems(current.logs, next.logs),
+    vaultItems: mergeItems(current.vaultItems, next.vaultItems),
     settings: {
       ...current.settings,
       ...next.settings,

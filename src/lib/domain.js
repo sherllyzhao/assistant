@@ -18,6 +18,15 @@ export const logRanges = [
   { value: "month", label: "本月日志" },
 ];
 
+export const vaultCategories = [
+  { value: "website", label: "网站账号" },
+  { value: "client", label: "客户系统" },
+  { value: "software", label: "软件授权" },
+  { value: "network", label: "网络/VPN" },
+  { value: "api", label: "API/Token" },
+  { value: "other", label: "其他" },
+];
+
 export const dailySlots = [
   { value: "morning", label: "早上", startHour: 6, endHour: 12 },
   { value: "noon", label: "中午", startHour: 12, endHour: 14 },
@@ -57,12 +66,84 @@ export const emptyTaskDraft = {
   attachments: [],
 };
 
+export const emptyVaultDraft = {
+  title: "",
+  category: "website",
+  username: "",
+  password: "",
+  url: "",
+  note: "",
+  tags: "",
+};
+
 export function createId(prefix) {
   if (globalThis.crypto?.randomUUID) {
     return `${prefix}_${globalThis.crypto.randomUUID()}`;
   }
 
   return `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+}
+
+export function getVaultCategoryMeta(category) {
+  return vaultCategories.find((item) => item.value === category) || vaultCategories[vaultCategories.length - 1];
+}
+
+export function maskSecretValue(value, visibleStart = 2, visibleEnd = 2) {
+  const cleanValue = String(value || "");
+
+  if (!cleanValue) {
+    return "";
+  }
+
+  if (cleanValue.length <= visibleStart + visibleEnd + 1) {
+    return "•".repeat(Math.max(cleanValue.length, 4));
+  }
+
+  return `${cleanValue.slice(0, visibleStart)}${"•".repeat(6)}${cleanValue.slice(-visibleEnd)}`;
+}
+
+export function createVaultPlaintext(draft) {
+  return {
+    username: String(draft?.username || "").trim(),
+    password: String(draft?.password || ""),
+    url: String(draft?.url || "").trim(),
+    note: String(draft?.note || "").trim(),
+  };
+}
+
+export function normalizeVaultItem(item) {
+  const encrypted = item?.encrypted && typeof item.encrypted === "object" ? item.encrypted : {};
+  const category = vaultCategories.some((option) => option.value === item?.category) ? item.category : "other";
+
+  return {
+    id: item?.id || createId("vault"),
+    title: String(item?.title || "").trim(),
+    category,
+    tags: normalizeTags(item?.tags),
+    usernameHint: String(item?.usernameHint || "").trim(),
+    createdAt: item?.createdAt || new Date().toISOString(),
+    updatedAt: item?.updatedAt || item?.createdAt || new Date().toISOString(),
+    lastViewedAt: item?.lastViewedAt || "",
+    encrypted: {
+      version: String(encrypted.version || "v1"),
+      algorithm: String(encrypted.algorithm || "AES-GCM"),
+      kdf: String(encrypted.kdf || "PBKDF2-SHA-256"),
+      iterations: Number.parseInt(encrypted.iterations || "210000", 10),
+      salt: String(encrypted.salt || ""),
+      iv: String(encrypted.iv || ""),
+      ciphertext: String(encrypted.ciphertext || ""),
+    },
+  };
+}
+
+export function normalizeVaultItems(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((item) => normalizeVaultItem(item))
+    .filter((item) => item.title && item.encrypted.salt && item.encrypted.iv && item.encrypted.ciphertext);
 }
 
 export function normalizeTags(value) {

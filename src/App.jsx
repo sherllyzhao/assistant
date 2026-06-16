@@ -23,6 +23,7 @@ import {
   RefreshCw,
   Save,
   Search,
+  ShieldCheck,
   Trash2,
   UserRound,
   Wand2,
@@ -41,7 +42,9 @@ import {
   createDailyReport,
   createAttachment,
   createTaskOrganizingSuggestions,
+  createVaultPlaintext,
   emptyTaskDraft,
+  emptyVaultDraft,
   filterLogsByRange,
   formatDateTime,
   getDailyProgress,
@@ -55,17 +58,23 @@ import {
   isOverdue,
   launchActionTypes,
   logRanges,
+  maskSecretValue,
   normalizeLaunchAction,
   normalizeAttachments,
   normalizeDailySlotReminderRecords,
   normalizeDailyTarget,
   normalizeDailySlots,
+  normalizeTags,
+  normalizeVaultItem,
+  normalizeVaultItems,
   priorities,
   shouldRemindCandidate,
   shouldRemindTask,
   taskStatuses,
   toDateTimeInputValue,
+  vaultCategories,
 } from "./lib/domain.js";
+import { decryptVaultPayload, encryptVaultPayload, hasVaultCryptoSupport } from "./lib/vaultCrypto.js";
 import {
   initialData,
   changePassword,
@@ -110,6 +119,7 @@ const ownerOptions = [
 
 const viewOptions = [
   { value: "tasks", label: "任务看板", description: "录入、筛选和推进待办" },
+  { value: "vault", label: "安全速记", description: "保存账号、密码和密钥" },
   { value: "report", label: "工作日报", description: "查看日报概览与日志明细" },
   { value: "profile", label: "个人信息", description: "查看账号并修改密码" },
 ];
@@ -117,6 +127,7 @@ const viewOptions = [
 const cloudSyncEnabled = Boolean(import.meta.env.VITE_SHERLLY_API_URL);
 const REMINDER_ALERT_AUTO_DISMISS_MS = 5000;
 const CLOCK_TICK_MS = 60 * 1000;
+const VAULT_UNLOCK_TTL_MS = 2 * 60 * 1000;
 const visibleUpdateStates = new Set(["available", "downloading", "downloaded", "installing", "error"]);
 const imageMimeExtensions = {
   "image/apng": "apng",
@@ -299,6 +310,13 @@ function App() {
   const [isPasswordSaving, setIsPasswordSaving] = useState(false);
   const [draft, setDraft] = useState(emptyTaskDraft);
   const [editingId, setEditingId] = useState("");
+  const [vaultDraft, setVaultDraft] = useState(emptyVaultDraft);
+  const [vaultEditingId, setVaultEditingId] = useState("");
+  const [vaultMasterPassword, setVaultMasterPassword] = useState("");
+  const [vaultSearchQuery, setVaultSearchQuery] = useState("");
+  const [vaultCategoryFilter, setVaultCategoryFilter] = useState("all");
+  const [vaultUnlockedItems, setVaultUnlockedItems] = useState({});
+  const [vaultStatus, setVaultStatus] = useState({ type: "", message: "" });
   const [wechatText, setWechatText] = useState("");
   const [activeView, setActiveView] = useState("tasks");
   const [taskFilter, setTaskFilter] = useState("active");
@@ -321,6 +339,7 @@ function App() {
   const reminderAlertTimersRef = useRef(new Map());
   const speechRecognitionRef = useRef(null);
   const dailySlotReminderKeysRef = useRef(new Set());
+  const vaultUnlockTimersRef = useRef(new Map());
 
   useEffect(() => {
     const intervalId = window.setInterval(() => setCurrentTime(new Date()), CLOCK_TICK_MS);
@@ -657,6 +676,14 @@ function App() {
     };
   }, []);
 
+  useEffect(() => {
+    return () => {
+      for (const timerId of vaultUnlockTimersRef.current.values()) {
+        window.clearTimeout(timerId);
+      }
+    };
+  }, []);
+
   const taskStats = useMemo(() => {
     const activeTasks = data.tasks.filter((task) => !["done", "cancelled"].includes(task.status));
 
@@ -703,6 +730,32 @@ function App() {
         return priorityScore[a.priority] - priorityScore[b.priority] || dueA - dueB;
       });
   }, [data.tasks, searchQuery, taskFilter]);
+
+  const vaultItems = useMemo(() => normalizeVaultItems(data.vaultItems), [data.vaultItems]);
+  const filteredVaultItems = useMemo(() => {
+    const query = vaultSearchQuery.trim().toLowerCase();
+
+    return vaultItems
+      .filter((item) => vaultCategoryFilter === "all" || item.category === vaultCategoryFilter)
+      .filter((item) => {
+        if (!query) {
+          return true;
+        }
+
+        return [item.title, item.usernameHint, item.category, ...(Array.isArray(item.tags) ? item.tags : [])]
+          .join(" ")
+          .toLowerCase()
+          .includes(query);
+      })
+      .sort((a, b) => new Date(b.updatedAt || b.createdAt).getTime() - new Date(a.updatedAt || a.createdAt).getTime());
+  }, [vaultCategoryFilter, vaultItems, vaultSearchQuery]);
+  const vaultStats = useMemo(
+    () => ({
+      total: vaultItems.length,
+      unlocked: Object.keys(vaultUnlockedItems).length,
+    }),
+    [vaultItems.length, vaultUnlockedItems],
+  );
 
   const visibleLogs = useMemo(
     () => filterLogsByRange(data.logs, logRange, currentTime).slice().reverse(),
@@ -1183,6 +1236,204 @@ function App() {
         flash: false,
       });
     }
+  }
+
+  function updateVaultDraft(field, value) {
+    setVaultDraft((current) => ({ ...current, [field]: value }));
+  }
+
+  function resetVaultDraft() {
+    setVaultDraft(emptyVaultDraft);
+    setVaultEditingId("");
+    setVaultStatus({ type: "", message: "" });
+  }
+
+  function scheduleVaultAutoLock(itemId) {
+    const currentTimer = vaultUnlockTimersRef.current.get(itemId);
+
+    if (currentTimer) {
+      window.clearTimeout(currentTimer);
+    }
+
+    const timerId = window.setTimeout(() => {
+      setVaultUnlockedItems((current) => {
+        const next = { ...current };
+        delete next[itemId];
+        return next;
+      });
+      vaultUnlockTimersRef.current.delete(itemId);
+    }, VAULT_UNLOCK_TTL_MS);
+
+    vaultUnlockTimersRef.current.set(itemId, timerId);
+  }
+
+  async function submitVaultItem(event) {
+    event.preventDefault();
+    setVaultStatus({ type: "", message: "" });
+
+    if (!vaultDraft.title.trim()) {
+      setVaultStatus({ type: "error", message: "先写一个标题，之后才好找。" });
+      return;
+    }
+
+    if (vaultEditingId && !vaultUnlockedItems[vaultEditingId]) {
+      setVaultStatus({ type: "error", message: "编辑前请先解锁这条安全速记，避免空内容覆盖旧密文。" });
+      return;
+    }
+
+    if (!hasVaultCryptoSupport()) {
+      setVaultStatus({ type: "error", message: "当前环境不支持安全加密，暂时不能保存密码。" });
+      return;
+    }
+
+    try {
+      const now = new Date();
+      const plaintext = createVaultPlaintext(vaultDraft);
+      const encrypted = await encryptVaultPayload(plaintext, vaultMasterPassword);
+      const baseItem = vaultEditingId
+        ? vaultItems.find((item) => item.id === vaultEditingId)
+        : null;
+      const vaultItem = normalizeVaultItem({
+        ...(baseItem || {}),
+        id: vaultEditingId || createId("vault"),
+        title: vaultDraft.title.trim(),
+        category: vaultDraft.category,
+        tags: normalizeTags(vaultDraft.tags),
+        usernameHint: maskSecretValue(plaintext.username, 2, 1),
+        encrypted,
+        createdAt: baseItem?.createdAt || now.toISOString(),
+        updatedAt: now.toISOString(),
+      });
+
+      setData((current) => ({
+        ...current,
+        vaultItems: vaultEditingId
+          ? normalizeVaultItems(current.vaultItems).map((item) => (item.id === vaultEditingId ? vaultItem : item))
+          : [vaultItem, ...normalizeVaultItems(current.vaultItems)],
+        logs: [
+          ...current.logs,
+          createLog(vaultEditingId ? "修改安全速记" : "创建安全速记", { id: vaultItem.id, title: vaultItem.title }, "敏感内容已加密保存", now),
+        ],
+      }));
+      setVaultUnlockedItems((current) => ({
+        ...current,
+        [vaultItem.id]: {
+          ...plaintext,
+          unlockedAt: now.toISOString(),
+        },
+      }));
+      scheduleVaultAutoLock(vaultItem.id);
+      setVaultStatus({ type: "success", message: vaultEditingId ? "安全速记已更新" : "安全速记已保存" });
+      setVaultDraft(emptyVaultDraft);
+      setVaultEditingId("");
+    } catch (error) {
+      setVaultStatus({ type: "error", message: error.message || "保存失败，请检查主密码。" });
+    }
+  }
+
+  function editVaultItem(item) {
+    const unlocked = vaultUnlockedItems[item.id];
+
+    setActiveView("vault");
+    setVaultEditingId(item.id);
+    setVaultDraft({
+      title: item.title,
+      category: item.category,
+      username: unlocked?.username || "",
+      password: unlocked?.password || "",
+      url: unlocked?.url || "",
+      note: unlocked?.note || "",
+      tags: Array.isArray(item.tags) ? item.tags.join(" ") : "",
+    });
+    setVaultStatus({
+      type: unlocked ? "success" : "error",
+      message: unlocked ? "已载入解锁内容，可编辑后重新加密保存。" : "请先解锁这条速记，再编辑敏感字段。",
+    });
+  }
+
+  async function unlockVaultItem(item) {
+    setVaultStatus({ type: "", message: "" });
+
+    try {
+      const plaintext = await decryptVaultPayload(item.encrypted, vaultMasterPassword);
+      const now = new Date();
+
+      setVaultUnlockedItems((current) => ({
+        ...current,
+        [item.id]: {
+          ...plaintext,
+          unlockedAt: now.toISOString(),
+        },
+      }));
+      scheduleVaultAutoLock(item.id);
+      setData((current) => ({
+        ...current,
+        vaultItems: normalizeVaultItems(current.vaultItems).map((vaultItem) =>
+          vaultItem.id === item.id ? { ...vaultItem, lastViewedAt: now.toISOString() } : vaultItem,
+        ),
+        logs: [...current.logs, createLog("查看安全速记", { id: item.id, title: item.title }, "已解锁查看，日志不记录敏感内容", now)],
+      }));
+      setVaultStatus({ type: "success", message: "已解锁，敏感内容只在当前页面短时显示。" });
+    } catch (error) {
+      setVaultStatus({ type: "error", message: "解锁失败，请检查保险箱主密码。" });
+    }
+  }
+
+  function lockVaultItem(itemId) {
+    const currentTimer = vaultUnlockTimersRef.current.get(itemId);
+
+    if (currentTimer) {
+      window.clearTimeout(currentTimer);
+      vaultUnlockTimersRef.current.delete(itemId);
+    }
+
+    setVaultUnlockedItems((current) => {
+      const next = { ...current };
+      delete next[itemId];
+      return next;
+    });
+  }
+
+  async function copyVaultValue(item, field, label) {
+    const unlocked = vaultUnlockedItems[item.id];
+    const value = unlocked?.[field] || "";
+
+    if (!value) {
+      setVaultStatus({ type: "error", message: `没有可复制的${label}` });
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(value);
+      const now = new Date();
+      setData((current) => ({
+        ...current,
+        logs: [...current.logs, createLog("复制安全速记", { id: item.id, title: item.title }, `复制${label}，日志不记录内容`, now)],
+      }));
+      setVaultStatus({ type: "success", message: `${label}已复制，30 秒后会尝试清空剪贴板。` });
+      window.setTimeout(() => {
+        navigator.clipboard?.writeText?.("").catch(() => {});
+      }, 30 * 1000);
+    } catch (error) {
+      setVaultStatus({ type: "error", message: error.message || "复制失败，当前环境可能不允许访问剪贴板。" });
+    }
+  }
+
+  function deleteVaultItem(item) {
+    const now = new Date();
+
+    setData((current) => ({
+      ...current,
+      vaultItems: normalizeVaultItems(current.vaultItems).filter((vaultItem) => vaultItem.id !== item.id),
+      logs: [...current.logs, createLog("删除安全速记", { id: item.id, title: item.title }, "已删除加密速记", now)],
+    }));
+    lockVaultItem(item.id);
+
+    if (vaultEditingId === item.id) {
+      resetVaultDraft();
+    }
+
+    setVaultStatus({ type: "success", message: `已删除「${item.title}」` });
   }
 
   function handleTaskFormPaste(event) {
@@ -1885,10 +2136,18 @@ function App() {
         ))}
       </section>
 
-      <div className={`workspace-grid ${activeView === "profile" ? "profile-grid" : ""}`}>
+      <div className={`workspace-grid ${["profile", "vault"].includes(activeView) ? "profile-grid" : ""}`}>
         <section
           className="task-area"
-          aria-label={activeView === "tasks" ? "任务列表" : activeView === "profile" ? "个人信息" : "工作日报"}
+          aria-label={
+            activeView === "tasks"
+              ? "任务列表"
+              : activeView === "profile"
+                ? "个人信息"
+                : activeView === "vault"
+                  ? "安全速记"
+                  : "工作日报"
+          }
         >
           {activeView === "tasks" ? (
             <>
@@ -1952,6 +2211,30 @@ function App() {
               onUpdate={updatePasswordDraft}
               status={passwordStatus}
             />
+          ) : activeView === "vault" ? (
+            <VaultPanel
+              categoryFilter={vaultCategoryFilter}
+              cryptoSupported={hasVaultCryptoSupport()}
+              draft={vaultDraft}
+              editingId={vaultEditingId}
+              items={filteredVaultItems}
+              masterPassword={vaultMasterPassword}
+              onCancelEdit={resetVaultDraft}
+              onCategoryFilterChange={setVaultCategoryFilter}
+              onCopyValue={copyVaultValue}
+              onDeleteItem={deleteVaultItem}
+              onEditItem={editVaultItem}
+              onLockItem={lockVaultItem}
+              onMasterPasswordChange={setVaultMasterPassword}
+              onSearchChange={setVaultSearchQuery}
+              onSubmit={submitVaultItem}
+              onUnlockItem={unlockVaultItem}
+              onUpdateDraft={updateVaultDraft}
+              searchQuery={vaultSearchQuery}
+              stats={vaultStats}
+              status={vaultStatus}
+              unlockedItems={vaultUnlockedItems}
+            />
           ) : (
             <ReportPanel
               dailyReport={dailyReport}
@@ -1968,7 +2251,7 @@ function App() {
           )}
         </section>
 
-        {activeView === "profile" ? null : (
+        {["profile", "vault"].includes(activeView) ? null : (
         <aside className="side-rail" aria-label="录入与候选任务">
           <section className="panel">
             <div className="panel-heading">
@@ -2362,6 +2645,270 @@ function ProfilePanel({ account, draft, isSubmitting, onSubmit, onUpdate, status
         </section>
       </div>
     </div>
+  );
+}
+
+function VaultPanel({
+  categoryFilter,
+  cryptoSupported,
+  draft,
+  editingId,
+  items,
+  masterPassword,
+  onCancelEdit,
+  onCategoryFilterChange,
+  onCopyValue,
+  onDeleteItem,
+  onEditItem,
+  onLockItem,
+  onMasterPasswordChange,
+  onSearchChange,
+  onSubmit,
+  onUnlockItem,
+  onUpdateDraft,
+  searchQuery,
+  stats,
+  status,
+  unlockedItems,
+}) {
+  return (
+    <div className="vault-panel">
+      <div className="section-toolbar vault-toolbar">
+        <div>
+          <p className="eyebrow">Secure Notes</p>
+          <h2>安全速记</h2>
+        </div>
+        <ShieldCheck size={20} />
+      </div>
+
+      <section className="vault-guard">
+        <div>
+          <strong>保险箱主密码</strong>
+          <p>主密码只用于本次加密/解锁，不会保存到本地或云端。忘记后无法解密旧内容。</p>
+        </div>
+        <label>
+          主密码
+          <input
+            type="password"
+            value={masterPassword}
+            onChange={(event) => onMasterPasswordChange(event.target.value)}
+            placeholder="至少 6 位，用来加密和解锁"
+          />
+        </label>
+      </section>
+
+      {!cryptoSupported ? (
+        <p className="profile-message is-error">当前环境不支持 Web Crypto，暂时不能使用安全速记。</p>
+      ) : null}
+
+      {status.message ? <p className={`profile-message is-${status.type || "success"}`}>{status.message}</p> : null}
+
+      <div className="vault-grid">
+        <section className="vault-card">
+          <div className="vault-card-heading">
+            <strong>{editingId ? "编辑安全速记" : "新增安全速记"}</strong>
+            {editingId ? (
+              <button className="icon-button" type="button" onClick={onCancelEdit} title="取消编辑">
+                <X size={17} />
+              </button>
+            ) : null}
+          </div>
+
+          <form className="vault-form" onSubmit={onSubmit}>
+            <div className="form-grid">
+              <label>
+                标题
+                <input
+                  value={draft.title}
+                  onChange={(event) => onUpdateDraft("title", event.target.value)}
+                  placeholder="例如：客户报价系统"
+                />
+              </label>
+              <label>
+                分类
+                <select value={draft.category} onChange={(event) => onUpdateDraft("category", event.target.value)}>
+                  {vaultCategories.map((category) => (
+                    <option key={category.value} value={category.value}>
+                      {category.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+
+            <div className="form-grid">
+              <label>
+                账号
+                <input
+                  value={draft.username}
+                  onChange={(event) => onUpdateDraft("username", event.target.value)}
+                  placeholder="用户名 / 邮箱 / 手机号"
+                />
+              </label>
+              <label>
+                密码 / Token
+                <input
+                  type="password"
+                  value={draft.password}
+                  onChange={(event) => onUpdateDraft("password", event.target.value)}
+                  placeholder="保存时会加密"
+                />
+              </label>
+            </div>
+
+            <label>
+              网址
+              <input
+                value={draft.url}
+                onChange={(event) => onUpdateDraft("url", event.target.value)}
+                placeholder="https://example.com"
+              />
+            </label>
+
+            <label>
+              标签
+              <input
+                value={draft.tags}
+                onChange={(event) => onUpdateDraft("tags", event.target.value)}
+                placeholder="客户 财务 常用"
+              />
+            </label>
+
+            <label>
+              备注
+              <textarea
+                value={draft.note}
+                onChange={(event) => onUpdateDraft("note", event.target.value)}
+                rows={3}
+                placeholder="只写必要说明，保存后会加密"
+              />
+            </label>
+
+            <button className="primary-button" type="submit" disabled={!cryptoSupported}>
+              <Save size={17} />
+              {editingId ? "重新加密保存" : "加密保存"}
+            </button>
+          </form>
+        </section>
+
+        <section className="vault-card">
+          <div className="vault-card-heading">
+            <strong>保险箱列表</strong>
+            <span>
+              {stats.total} 条 · 已解锁 {stats.unlocked}
+            </span>
+          </div>
+
+          <div className="vault-filters">
+            <label>
+              搜索
+              <input
+                type="search"
+                value={searchQuery}
+                onChange={(event) => onSearchChange(event.target.value)}
+                placeholder="标题、账号、标签"
+              />
+            </label>
+            <label>
+              分类
+              <select value={categoryFilter} onChange={(event) => onCategoryFilterChange(event.target.value)}>
+                <option value="all">全部分类</option>
+                {vaultCategories.map((category) => (
+                  <option key={category.value} value={category.value}>
+                    {category.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+
+          <div className="vault-list">
+            {items.length === 0 ? (
+              <EmptyState icon={<ShieldCheck size={22} />} text="还没有安全速记" />
+            ) : (
+              items.map((item) => (
+                <VaultItemCard
+                  item={item}
+                  key={item.id}
+                  onCopyValue={onCopyValue}
+                  onDeleteItem={onDeleteItem}
+                  onEditItem={onEditItem}
+                  onLockItem={onLockItem}
+                  onUnlockItem={onUnlockItem}
+                  unlocked={unlockedItems[item.id]}
+                />
+              ))
+            )}
+          </div>
+        </section>
+      </div>
+    </div>
+  );
+}
+
+function VaultItemCard({ item, onCopyValue, onDeleteItem, onEditItem, onLockItem, onUnlockItem, unlocked }) {
+  const category = vaultCategories.find((option) => option.value === item.category) || vaultCategories[vaultCategories.length - 1];
+  const tags = Array.isArray(item.tags) ? item.tags : [];
+
+  return (
+    <article className="vault-item">
+      <div className="vault-item-heading">
+        <div>
+          <strong>{item.title}</strong>
+          <span>{category.label}</span>
+        </div>
+        <button className="secondary-button" type="button" onClick={() => (unlocked ? onLockItem(item.id) : onUnlockItem(item))}>
+          <ShieldCheck size={15} />
+          {unlocked ? "隐藏" : "解锁"}
+        </button>
+      </div>
+
+      <dl className="vault-fields">
+        <div>
+          <dt>账号</dt>
+          <dd>{unlocked?.username || item.usernameHint || "未填写"}</dd>
+        </div>
+        <div>
+          <dt>密码</dt>
+          <dd>{unlocked?.password ? maskSecretValue(unlocked.password, 0, 0) : "已加密"}</dd>
+        </div>
+        {unlocked?.url ? (
+          <div>
+            <dt>网址</dt>
+            <dd>{unlocked.url}</dd>
+          </div>
+        ) : null}
+        {unlocked?.note ? (
+          <div>
+            <dt>备注</dt>
+            <dd>{unlocked.note}</dd>
+          </div>
+        ) : null}
+      </dl>
+
+      {tags.length > 0 ? (
+        <div className="tag-list">
+          {tags.map((tag) => (
+            <span key={tag}>{tag}</span>
+          ))}
+        </div>
+      ) : null}
+
+      <div className="vault-item-actions">
+        <button type="button" onClick={() => onCopyValue(item, "username", "账号")} disabled={!unlocked}>
+          复制账号
+        </button>
+        <button type="button" onClick={() => onCopyValue(item, "password", "密码")} disabled={!unlocked}>
+          复制密码
+        </button>
+        <button type="button" onClick={() => onEditItem(item)}>
+          编辑
+        </button>
+        <button className="danger" type="button" onClick={() => onDeleteItem(item)}>
+          删除
+        </button>
+      </div>
+    </article>
   );
 }
 

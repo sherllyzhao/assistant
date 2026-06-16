@@ -9,6 +9,7 @@ export const initialData = {
   tasks: [],
   candidates: [],
   logs: [],
+  vaultItems: [],
   settings: {
     soundEnabled: true,
   },
@@ -19,6 +20,7 @@ function normalizeData(data) {
     tasks: Array.isArray(data?.tasks) ? data.tasks : [],
     candidates: Array.isArray(data?.candidates) ? data.candidates : [],
     logs: Array.isArray(data?.logs) ? data.logs : [],
+    vaultItems: Array.isArray(data?.vaultItems) ? data.vaultItems : [],
     settings: {
       ...initialData.settings,
       ...(data?.settings && typeof data.settings === "object" ? data.settings : {}),
@@ -178,7 +180,7 @@ async function loadLocalDataForMigration(scope) {
 }
 
 function hasMeaningfulData(data) {
-  return data.tasks.length > 0 || data.candidates.length > 0 || data.logs.length > 0;
+  return data.tasks.length > 0 || data.candidates.length > 0 || data.logs.length > 0 || data.vaultItems.length > 0;
 }
 
 function getItemTimestamp(item) {
@@ -217,6 +219,7 @@ export function mergeData(cloudData, localData) {
     tasks: mergeItems(cloud.tasks, local.tasks),
     candidates: mergeItems(cloud.candidates, local.candidates),
     logs: mergeItems(cloud.logs, local.logs),
+    vaultItems: mergeItems(cloud.vaultItems, local.vaultItems),
     settings: {
       ...cloud.settings,
       ...local.settings,

@@ -2,6 +2,7 @@ const defaultData = {
   tasks: [],
   candidates: [],
   logs: [],
+  vaultItems: [],
   settings: {
     soundEnabled: true,
   },
@@ -16,6 +17,7 @@ function normalizeData(data) {
     tasks: Array.isArray(data?.tasks) ? data.tasks : [],
     candidates: Array.isArray(data?.candidates) ? data.candidates : [],
     logs: Array.isArray(data?.logs) ? data.logs : [],
+    vaultItems: Array.isArray(data?.vaultItems) ? data.vaultItems : [],
     settings: {
       ...defaultData.settings,
       ...(data?.settings && typeof data.settings === "object" ? data.settings : {}),
