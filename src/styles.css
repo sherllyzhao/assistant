@@ -185,6 +185,16 @@ button:disabled {
   line-height: 1.5;
 }
 
+.turnstile-field {
+  display: grid;
+  min-height: 65px;
+  overflow: hidden;
+}
+
+.turnstile-field > div {
+  min-width: 0;
+}
+
 .sync-error-banner {
   margin: -8px 0 16px;
   padding: 11px 13px;

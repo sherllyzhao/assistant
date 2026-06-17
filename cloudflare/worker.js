@@ -232,6 +232,46 @@ function isAuthorized(request, env, url) {
   return !expectedToken || getRequestToken(request, url, env) === expectedToken;
 }
 
+function getClientIp(request) {
+  return String(request.headers.get("CF-Connecting-IP") || request.headers.get("X-Forwarded-For") || "")
+    .split(",")[0]
+    .trim();
+}
+
+async function verifyTurnstileToken(request, env, body) {
+  const secret = String(env.TURNSTILE_SECRET_KEY || "").trim();
+
+  if (!secret) {
+    return;
+  }
+
+  const token = String(body?.turnstileToken || body?.["cf-turnstile-response"] || "").trim();
+
+  if (!token) {
+    throw createHttpError(400, "请先完成人类验证");
+  }
+
+  const formData = new FormData();
+  formData.append("secret", secret);
+  formData.append("response", token);
+
+  const clientIp = getClientIp(request);
+
+  if (clientIp) {
+    formData.append("remoteip", clientIp);
+  }
+
+  const response = await fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
+    method: "POST",
+    body: formData,
+  });
+  const result = await response.json().catch(() => null);
+
+  if (!response.ok || !result?.success) {
+    throw createHttpError(400, "人类验证失败，请重试");
+  }
+}
+
 function getStorageKey(userId) {
   return `appData:${userId}`;
 }
@@ -713,11 +753,15 @@ async function handleRequest(request, env) {
   }
 
   if (url.pathname === "/api/auth/register" && request.method === "POST") {
-    return jsonResponse(request, env, await registerAccount(env, await request.json()), 201);
+    const body = await request.json();
+    await verifyTurnstileToken(request, env, body);
+    return jsonResponse(request, env, await registerAccount(env, body), 201);
   }
 
   if (url.pathname === "/api/auth/login" && request.method === "POST") {
-    return jsonResponse(request, env, await loginAccount(env, await request.json()));
+    const body = await request.json();
+    await verifyTurnstileToken(request, env, body);
+    return jsonResponse(request, env, await loginAccount(env, body));
   }
 
   if (url.pathname === "/api/auth/me" && request.method === "GET") {

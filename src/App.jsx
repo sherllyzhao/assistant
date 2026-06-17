@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Bell,
   CalendarClock,
@@ -1945,6 +1945,11 @@ function App() {
     setTurnstileResetKey((current) => current + 1);
   }
 
+  const handleTurnstileError = useCallback((message) => {
+    setTurnstileToken("");
+    setAuthError(message);
+  }, []);
+
   function switchAuthMode(nextMode) {
     setAuthMode(nextMode);
     setAuthError("");
@@ -2053,10 +2058,7 @@ function App() {
         onModeChange={switchAuthMode}
         onSubmit={submitAuth}
         onTurnstileChange={setTurnstileToken}
-        onTurnstileError={(message) => {
-          setTurnstileToken("");
-          setAuthError(message);
-        }}
+        onTurnstileError={handleTurnstileError}
         onUpdate={updateAuthDraft}
         turnstileResetKey={turnstileResetKey}
         turnstileSiteKey={turnstileSiteKey}

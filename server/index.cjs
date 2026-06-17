@@ -17,6 +17,7 @@ const MONGODB_SERVER_SELECTION_TIMEOUT_MS = Number.parseInt(
 );
 const CORS_ORIGIN = process.env.CORS_ORIGIN || "http://127.0.0.1:5188";
 const SHERLLY_API_TOKEN = String(process.env.SHERLLY_API_TOKEN || "").trim();
+const TURNSTILE_SECRET_KEY = String(process.env.TURNSTILE_SECRET_KEY || "").trim();
 const SESSION_TTL_DAYS = Number.parseInt(process.env.SHERLLY_SESSION_TTL_DAYS || "30", 10);
 const PASSWORD_HASH_ITERATIONS = 310000;
 const PASSWORD_HASH_KEY_LENGTH = 32;
@@ -201,6 +202,45 @@ function createHttpError(status, message) {
   const error = new Error(message);
   error.status = status;
   return error;
+}
+
+function getClientIp(request) {
+  return String(request.get("cf-connecting-ip") || request.ip || "")
+    .split(",")[0]
+    .trim();
+}
+
+async function verifyTurnstileToken(request, body) {
+  if (!TURNSTILE_SECRET_KEY) {
+    return;
+  }
+
+  const token = String(body?.turnstileToken || body?.["cf-turnstile-response"] || "").trim();
+
+  if (!token) {
+    throw createHttpError(400, "请先完成人类验证");
+  }
+
+  const formData = new FormData();
+  formData.append("secret", TURNSTILE_SECRET_KEY);
+  formData.append("response", token);
+
+  const clientIp = getClientIp(request);
+
+  if (clientIp) {
+    formData.append("remoteip", clientIp);
+  }
+
+  const response = await fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
+    method: "POST",
+    body: formData,
+  });
+
+  const result = await response.json().catch(() => null);
+
+  if (!response.ok || !result?.success) {
+    throw createHttpError(400, "人类验证失败，请重试");
+  }
 }
 
 function normalizeUsername(value) {
@@ -452,6 +492,7 @@ function createServer() {
 
   app.post("/api/auth/register", async (request, response, next) => {
     try {
+      await verifyTurnstileToken(request, request.body);
       response.status(201).json(await registerAccount(request.body));
     } catch (error) {
       next(error);
@@ -460,6 +501,7 @@ function createServer() {
 
   app.post("/api/auth/login", async (request, response, next) => {
     try {
+      await verifyTurnstileToken(request, request.body);
       response.json(await loginAccount(request.body));
     } catch (error) {
       next(error);
