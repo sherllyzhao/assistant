@@ -1515,6 +1515,10 @@ function getAssistantQuestionIntent(query, keywords) {
     return "focus";
   }
 
+  if (keywords.length > 0 && /(未完成|没完成|待办|还没做|还没有做|进行中|没做完)/.test(question)) {
+    return "active-search";
+  }
+
   if (/(今天|今日|还剩|还有|没完成|未完成|待办)/.test(question)) {
     return "today";
   }
@@ -1888,6 +1892,36 @@ export function createAiWorkspaceAnswer(tasks, logs, query = "", now = new Date(
       projectGroups,
       memoryHints,
       recentLogs: report.sections.recentLogs,
+      keywords,
+      tips: baseTips,
+      usedQuery: cleanQuery,
+      generatedAt: now.toISOString(),
+    };
+  }
+
+  if (intent === "active-search") {
+    const matchedTasks = activeTasks.filter((task) => matchesAssistantKeywords(getTaskSearchText(task), keywords));
+    const matchedTaskIds = new Set(matchedTasks.map((task) => task.id));
+    const matchedLogs = normalizedLogs
+      .filter((log) => matchedTaskIds.has(log.taskId) || matchesAssistantKeywords(getLogSearchText(log), keywords))
+      .slice()
+      .sort(sortAssistantLogsNewestFirst)
+      .slice(0, 8);
+
+    return {
+      intent,
+      label: "相关未完成",
+      title: keywords.length > 0 ? `${keywords.join(" / ")} 的未完成事项` : "相关未完成事项",
+      summary: `共找到 ${matchedTasks.length} 件相关未完成任务；这里只包含待办、进行中和等待他人的事项，不含已完成或已取消。`,
+      taskSectionTitle: "相关未完成",
+      metrics: {
+        ...baseMetrics,
+        matched: matchedTasks.length,
+      },
+      primaryTasks: matchedTasks.slice().sort(sortAssistantTasksByFocus).slice(0, 8),
+      projectGroups,
+      memoryHints,
+      recentLogs: matchedLogs,
       keywords,
       tips: baseTips,
       usedQuery: cleanQuery,
