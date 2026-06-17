@@ -28,6 +28,8 @@ export const vaultCategories = [
   { value: "other", label: "其他" },
 ];
 
+export const DEFAULT_FTP_CLIENT_PATH = "D:\\ftp\\FlashFXP\\flashfxp.exe";
+
 export const dailySlots = [
   { value: "morning", label: "早上", startHour: 6, endHour: 12 },
   { value: "noon", label: "中午", startHour: 12, endHour: 14 },
@@ -57,6 +59,8 @@ export const emptyTaskDraft = {
   source: "手动录入",
   owner: "",
   dueAt: "",
+  reminderStartAt: "",
+  reminderEndAt: "",
   dailyTarget: 0,
   dailySlotValues: [],
   priority: "normal",
@@ -217,29 +221,103 @@ function normalizeClockHour(hour, meridiem) {
 }
 
 function parseClockFromText(text) {
-  const clockText = String(text || "");
-  const colonMatch = clockText.match(/(凌晨|早上|上午|中午|下午|晚上|今晚)?\s*(\d{1,2})[:：](\d{2})/);
+  const clock = parseClockEntriesFromText(text)[0];
 
-  if (colonMatch) {
-    const hour = normalizeClockHour(Number.parseInt(colonMatch[2], 10), colonMatch[1] || "");
-    const minute = Number.parseInt(colonMatch[3], 10);
+  return clock ? { hour: clock.hour, minute: clock.minute } : null;
+}
+
+function parseClockEntriesFromText(text) {
+  const clockText = String(text || "");
+  const clockPattern =
+    /(凌晨|早上|上午|中午|下午|晚上|今晚)?\s*(\d{1,2})(?:(?:[:：](\d{2}))|(?:点(?:(半)|(\d{1,2})分?)?))/g;
+  const entries = [];
+  let match;
+
+  while ((match = clockPattern.exec(clockText))) {
+    const meridiem = match[1] || "";
+    const hour = normalizeClockHour(Number.parseInt(match[2], 10), meridiem);
+    const minute = match[3] ? Number.parseInt(match[3], 10) : match[4] ? 30 : Number.parseInt(match[5] || "0", 10);
 
     if (hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59) {
-      return { hour, minute };
+      entries.push({
+        hour,
+        minute,
+        meridiem,
+        index: match.index,
+        endIndex: match.index + match[0].length,
+      });
     }
   }
 
-  const pointMatch = clockText.match(
-    /(凌晨|早上|上午|中午|下午|晚上|今晚)?\s*(\d{1,2})点(?:(半)|(\d{1,2})分?)?/,
+  return entries;
+}
+
+function applyFallbackMeridiem(clock, fallbackMeridiem) {
+  if (!clock || clock.meridiem || !fallbackMeridiem) {
+    return clock;
+  }
+
+  const normalizedHour = normalizeClockHour(clock.hour, fallbackMeridiem);
+
+  return {
+    ...clock,
+    hour: normalizedHour,
+  };
+}
+
+function hasExplicitDateHint(text) {
+  return /今天|今日|今晚|明天|明日|后天|周|星期|礼拜|月底|月末|(?:\d{4}年)?\d{1,2}月\d{1,2}[日号]?|(?:\d{4}[-/.])?\d{1,2}[-/.]\d{1,2}/.test(
+    String(text || ""),
   );
+}
 
-  if (pointMatch) {
-    const hour = normalizeClockHour(Number.parseInt(pointMatch[2], 10), pointMatch[1] || "");
-    const minute = pointMatch[3] ? 30 : Number.parseInt(pointMatch[4] || "0", 10);
+function getReminderWindowDateBase(text, now) {
+  return (
+    parseNumericDateDueAt(text, now) ||
+    parseMonthDateDueAt(text, now) ||
+    parseWeekdayDueAt(text, now) ||
+    parseRelativeDueAt(text, now) ||
+    parseWeekRangeDueAt(text, now) ||
+    parseMonthEndDueAt(text, now) ||
+    now
+  );
+}
 
-    if (hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59) {
-      return { hour, minute };
+function parseReminderWindowFromText(text, now) {
+  const cleanText = String(text || "").trim();
+
+  if (!cleanText) {
+    return null;
+  }
+
+  const clocks = parseClockEntriesFromText(cleanText);
+
+  for (let index = 0; index < clocks.length - 1; index += 1) {
+    const startClock = clocks[index];
+    const endClock = applyFallbackMeridiem(clocks[index + 1], startClock.meridiem);
+    const gap = cleanText.slice(startClock.endIndex, endClock.index);
+
+    if (!/^\s*(?:到|至|--?|－|—|–|~|～)\s*$/.test(gap)) {
+      continue;
     }
+
+    const dateBase = getReminderWindowDateBase(cleanText, now);
+    let startAt = setLocalTime(dateBase, startClock.hour, startClock.minute);
+    let endAt = setLocalTime(dateBase, endClock.hour, endClock.minute);
+
+    if (endAt.getTime() <= startAt.getTime()) {
+      endAt = addLocalDays(endAt, 1);
+    }
+
+    if (!hasExplicitDateHint(cleanText) && endAt.getTime() <= now.getTime()) {
+      startAt = addLocalDays(startAt, 1);
+      endAt = addLocalDays(endAt, 1);
+    }
+
+    return {
+      reminderStartAt: startAt.toISOString(),
+      reminderEndAt: endAt.toISOString(),
+    };
   }
 
   return null;
@@ -527,11 +605,14 @@ function getDraftIntelligenceText(draft) {
 
 export function inferTaskIntelligence(text, now = new Date()) {
   const cleanText = String(text || "").trim();
-  const dueAt = inferDueAtFromText(cleanText, now);
+  const reminderWindow = parseReminderWindowFromText(cleanText, now);
+  const dueAt = reminderWindow?.reminderEndAt ? new Date(reminderWindow.reminderEndAt) : inferDueAtFromText(cleanText, now);
   const owner = inferContactFromText(cleanText);
 
   return {
     dueAt: isValidDate(dueAt) ? dueAt.toISOString() : "",
+    reminderStartAt: reminderWindow?.reminderStartAt || "",
+    reminderEndAt: reminderWindow?.reminderEndAt || "",
     owner,
     priority: inferPriorityFromTextAndDueAt(cleanText, dueAt, now),
     tags: owner ? ["客户"] : [],
@@ -541,7 +622,11 @@ export function inferTaskIntelligence(text, now = new Date()) {
 export function applyTaskIntelligence(draft, now = new Date()) {
   const text = getDraftIntelligenceText(draft);
   const intelligence = inferTaskIntelligence(text, now);
-  const dueAt = draft?.dueAt || intelligence.dueAt;
+  const reminderWindow = normalizeReminderWindow(
+    draft?.reminderStartAt || intelligence.reminderStartAt,
+    draft?.reminderEndAt || intelligence.reminderEndAt,
+  );
+  const dueAt = draft?.dueAt || intelligence.dueAt || reminderWindow.reminderEndAt;
   const dueAtDate = dueAt ? new Date(dueAt) : null;
   const priority =
     draft?.priority && draft.priority !== "normal"
@@ -551,6 +636,7 @@ export function applyTaskIntelligence(draft, now = new Date()) {
   return {
     ...draft,
     dueAt,
+    ...reminderWindow,
     owner: String(draft?.owner || "").trim() || intelligence.owner,
     priority,
     tags: intelligence.tags.length > 0 ? mergeTagText(draft?.tags, intelligence.tags) : draft?.tags,
@@ -595,6 +681,23 @@ export function normalizeDailySlots(value, fallbackTarget = 0) {
   const fallbackSlots = fallbackSlotsByTarget[normalizedTarget];
 
   return fallbackSlots || dailySlots.map((slot) => slot.value);
+}
+
+export function normalizeReminderWindow(startAt, endAt) {
+  const startTime = startAt ? getFiniteTime(startAt) : NaN;
+  const endTime = endAt ? getFiniteTime(endAt) : NaN;
+
+  if (!Number.isFinite(startTime) || !Number.isFinite(endTime) || endTime <= startTime) {
+    return {
+      reminderStartAt: "",
+      reminderEndAt: "",
+    };
+  }
+
+  return {
+    reminderStartAt: new Date(startTime).toISOString(),
+    reminderEndAt: new Date(endTime).toISOString(),
+  };
 }
 
 export function getSlotMeta(value) {
@@ -681,6 +784,8 @@ export function createTask(draft, now = new Date()) {
     createdAt,
     updatedAt: createdAt,
     dueAt: smartDraft.dueAt ? new Date(smartDraft.dueAt).toISOString() : "",
+    reminderStartAt: smartDraft.reminderStartAt || "",
+    reminderEndAt: smartDraft.reminderEndAt || "",
     dailySlots: dailySlotValues,
     dailyTarget: dailySlotValues.length,
     completionRecords: [],
@@ -765,6 +870,10 @@ export function getLocalDateKey(value = new Date()) {
   const date = value instanceof Date ? value : new Date(value);
   const timezoneOffset = date.getTimezoneOffset() * 60000;
   return new Date(date.getTime() - timezoneOffset).toISOString().slice(0, 10);
+}
+
+export function getTaskReminderWindow(task) {
+  return normalizeReminderWindow(task?.reminderStartAt, task?.reminderEndAt);
 }
 
 export function getTaskCompletionsForDate(task, date = new Date()) {
@@ -901,10 +1010,15 @@ export function shouldRemindTask(task, now = new Date()) {
   }
 
   const reminderInterval = getReminderIntervalMinutes(task) * 60 * 1000;
+  const reminderWindow = getTaskReminderWindow(task);
+  const hasReminderWindow = Boolean(reminderWindow.reminderStartAt && reminderWindow.reminderEndAt);
   const fallbackStartTime = getFiniteTime(task?.createdAt || task?.updatedAt);
-  const reminderStartTime = task?.dueAt
+  const reminderStartTime = hasReminderWindow
+    ? getFiniteTime(reminderWindow.reminderStartAt)
+    : task?.dueAt
     ? getFiniteTime(getTaskReminderAt(task))
     : fallbackStartTime + reminderInterval;
+  const reminderEndTime = hasReminderWindow ? getFiniteTime(reminderWindow.reminderEndAt) : Number.POSITIVE_INFINITY;
   const lastRemindedTime = task.lastRemindedAt ? getFiniteTime(task.lastRemindedAt) : 0;
   const nowTime = now.getTime();
 
@@ -917,6 +1031,10 @@ export function shouldRemindTask(task, now = new Date()) {
   }
 
   if (nowTime < reminderStartTime) {
+    return false;
+  }
+
+  if (nowTime > reminderEndTime) {
     return false;
   }
 
@@ -1300,5 +1418,365 @@ export function createDailyReport(tasks, logs, range = "today", now = new Date()
       tomorrowFocus,
       recentLogs: scopedLogs.slice().reverse().slice(0, 8),
     },
+  };
+}
+
+function endOfLocalDay(value) {
+  const date = new Date(value);
+  date.setHours(23, 59, 59, 999);
+  return date;
+}
+
+function endOfLocalWeek(value) {
+  const end = addLocalDays(getLocalWeekStart(value), 7);
+  end.setMilliseconds(end.getMilliseconds() - 1);
+  return end;
+}
+
+function getAssistantPriorityRank(priority) {
+  return { high: 0, normal: 1, low: 2 }[priority] ?? 1;
+}
+
+function getAssistantDueTime(task) {
+  const dueTime = getFiniteTime(task?.dueAt);
+  return Number.isFinite(dueTime) ? dueTime : Number.MAX_SAFE_INTEGER;
+}
+
+function sortAssistantTasksByFocus(left, right) {
+  const priorityDelta = getAssistantPriorityRank(left.priority) - getAssistantPriorityRank(right.priority);
+
+  if (priorityDelta !== 0) {
+    return priorityDelta;
+  }
+
+  const dueDelta = getAssistantDueTime(left) - getAssistantDueTime(right);
+
+  if (dueDelta !== 0) {
+    return dueDelta;
+  }
+
+  const updatedLeft = getFiniteTime(left.updatedAt || left.createdAt);
+  const updatedRight = getFiniteTime(right.updatedAt || right.createdAt);
+  return (Number.isFinite(updatedRight) ? updatedRight : 0) - (Number.isFinite(updatedLeft) ? updatedLeft : 0);
+}
+
+function getAssistantQuestionIntent(query, keywords) {
+  const question = String(query || "").trim();
+
+  if (/等待|他人|对方|回复|反馈/.test(question)) {
+    return "waiting";
+  }
+
+  if (/长期|很久|停滞|卡住|拖了|推进/.test(question)) {
+    return "stale";
+  }
+
+  if (/(本周|这周|周|星期)/.test(question) && /(重要|重点|优先|安排|事情|事项|任务)/.test(question)) {
+    return "week";
+  }
+
+  if (/(今天|今日|还剩|还有|没完成|未完成|待办)/.test(question)) {
+    return "today";
+  }
+
+  if (keywords.length > 0 || /进展|情况|怎么样|如何/.test(question)) {
+    return "progress";
+  }
+
+  return "overview";
+}
+
+function extractAssistantKeywords(query) {
+  const cleaned = String(query || "")
+    .toLowerCase()
+    .replace(
+      /(sherlly|ai|工作台|今天|今日|明天|本周|这周|本月|这个月|还有|还剩|什么|哪些|哪个|怎么|怎样|如何|进展|重点|重要|事情|事项|任务|待办|未完成|没完成|完成|情况|一下|帮我|看看|查看|最|的|了|吗|呢|吧|有|是|和|与|及|回复|反馈|跟进)/g,
+      " ",
+    )
+    .replace(/[^\u4e00-\u9fa5a-z0-9]+/gi, " ");
+
+  return Array.from(new Set(cleaned.split(/\s+/).filter((keyword) => keyword.length >= 2))).slice(0, 4);
+}
+
+function getTaskSearchText(task) {
+  return [
+    task?.title,
+    task?.owner,
+    task?.source,
+    task?.note,
+    ...(Array.isArray(task?.tags) ? task.tags : []),
+  ]
+    .join(" ")
+    .toLowerCase();
+}
+
+function getLogSearchText(log) {
+  return [log?.action, log?.taskTitle, log?.detail].join(" ").toLowerCase();
+}
+
+function matchesAssistantKeywords(value, keywords) {
+  const text = String(value || "").toLowerCase();
+  return keywords.some((keyword) => text.includes(keyword));
+}
+
+function isTaskDueBefore(task, endTime) {
+  const dueTime = getFiniteTime(task?.dueAt);
+  return Number.isFinite(dueTime) && dueTime <= endTime;
+}
+
+function getTaskProjectName(task) {
+  const tags = Array.isArray(task?.tags) ? task.tags : [];
+
+  if (tags.length > 0) {
+    return tags[0];
+  }
+
+  const text = `${task?.title || ""} ${task?.note || ""}`;
+  const projectMatch = text.match(/客户[A-Za-z0-9\u4e00-\u9fa5]{0,8}|采购|财务|行政|报价|合同|开发|服务器|网站|证书|域名/);
+
+  if (projectMatch) {
+    return projectMatch[0];
+  }
+
+  if (task?.owner && task.owner !== "自己") {
+    return task.owner;
+  }
+
+  return task?.source || "未归类";
+}
+
+function createAssistantProjectGroups(tasks, now) {
+  const groups = new Map();
+
+  for (const task of tasks) {
+    const name = getTaskProjectName(task);
+    const group = groups.get(name) || {
+      name,
+      total: 0,
+      high: 0,
+      overdue: 0,
+      waiting: 0,
+      tasks: [],
+    };
+
+    group.total += 1;
+    group.high += task.priority === "high" ? 1 : 0;
+    group.overdue += isOverdue(task, now) ? 1 : 0;
+    group.waiting += task.status === "waiting" ? 1 : 0;
+    group.tasks.push(task);
+    groups.set(name, group);
+  }
+
+  return Array.from(groups.values())
+    .map((group) => ({
+      ...group,
+      tasks: group.tasks.slice().sort(sortAssistantTasksByFocus).slice(0, 3),
+    }))
+    .sort((left, right) => right.high - left.high || right.overdue - left.overdue || right.total - left.total)
+    .slice(0, 6);
+}
+
+function getWeekdayLabel(value) {
+  return ["周日", "周一", "周二", "周三", "周四", "周五", "周六"][new Date(value).getDay()];
+}
+
+function createAssistantMemoryHints(tasks) {
+  const ownerStats = new Map();
+  const dueWeekdayStats = new Map();
+
+  for (const task of tasks) {
+    if (task?.owner) {
+      const stats = ownerStats.get(task.owner) || { label: task.owner, total: 0, active: 0 };
+      stats.total += 1;
+      stats.active += isActiveTask(task) ? 1 : 0;
+      ownerStats.set(task.owner, stats);
+    }
+
+    if (task?.owner && task?.dueAt) {
+      const weekday = getWeekdayLabel(task.dueAt);
+      const key = `${task.owner}:${weekday}`;
+      const stats = dueWeekdayStats.get(key) || { label: task.owner, weekday, total: 0 };
+      stats.total += 1;
+      dueWeekdayStats.set(key, stats);
+    }
+  }
+
+  const weekdayHints = Array.from(dueWeekdayStats.values())
+    .filter((stats) => stats.total >= 2)
+    .sort((left, right) => right.total - left.total)
+    .map((stats) => ({
+      title: `${stats.label} · ${stats.weekday}`,
+      detail: `历史上有 ${stats.total} 条任务集中在${stats.weekday}，排期时建议提前确认。`,
+    }));
+
+  const ownerHints = Array.from(ownerStats.values())
+    .filter((stats) => stats.total >= 2)
+    .sort((left, right) => right.active - left.active || right.total - left.total)
+    .map((stats) => ({
+      title: stats.label,
+      detail: `累计 ${stats.total} 条相关任务，当前 ${stats.active} 条未完成。`,
+    }));
+
+  return [...weekdayHints, ...ownerHints].slice(0, 4);
+}
+
+function createAssistantLogScope(logs, range, now) {
+  return filterLogsByRange(Array.isArray(logs) ? logs : [], range, now).slice().reverse().slice(0, 8);
+}
+
+export function createAiWorkspaceAnswer(tasks, logs, query = "", now = new Date()) {
+  const normalizedTasks = Array.isArray(tasks) ? tasks : [];
+  const normalizedLogs = Array.isArray(logs) ? logs : [];
+  const activeTasks = normalizedTasks.filter((task) => task?.id && isActiveTask(task));
+  const completedTasks = normalizedTasks.filter((task) => task?.status === "done");
+  const overdueTasks = activeTasks.filter((task) => isOverdue(task, now));
+  const waitingTasks = activeTasks.filter((task) => task.status === "waiting");
+  const keywords = extractAssistantKeywords(query);
+  const intent = getAssistantQuestionIntent(query, keywords);
+  const todayEndTime = endOfLocalDay(now).getTime();
+  const weekEndTime = endOfLocalWeek(now).getTime();
+  const projectGroups = createAssistantProjectGroups(activeTasks, now);
+  const memoryHints = createAssistantMemoryHints(normalizedTasks);
+  const baseMetrics = {
+    active: activeTasks.length,
+    completed: completedTasks.length,
+    overdue: overdueTasks.length,
+    waiting: waitingTasks.length,
+  };
+
+  if (intent === "today") {
+    const scopedTasks = activeTasks.filter((task) => {
+      const progress = getDailyProgress(task, now);
+      return isTaskDueBefore(task, todayEndTime) || progress.isScheduled || task.priority === "high";
+    });
+    const primaryTasks = (scopedTasks.length > 0 ? scopedTasks : activeTasks).slice().sort(sortAssistantTasksByFocus).slice(0, 8);
+
+    return {
+      intent,
+      label: "今日未完成",
+      title: "今天还没收口的事",
+      summary: `当前未完成 ${activeTasks.length} 件，其中逾期 ${overdueTasks.length} 件、等待他人 ${waitingTasks.length} 件。优先看高优先级、今日到期和每日时段任务。`,
+      taskSectionTitle: "优先处理",
+      metrics: baseMetrics,
+      primaryTasks,
+      projectGroups,
+      memoryHints,
+      recentLogs: createAssistantLogScope(normalizedLogs, "today", now),
+      keywords,
+      generatedAt: now.toISOString(),
+    };
+  }
+
+  if (intent === "week") {
+    const primaryTasks = activeTasks
+      .filter((task) => task.priority === "high" || isTaskDueBefore(task, weekEndTime))
+      .slice()
+      .sort(sortAssistantTasksByFocus)
+      .slice(0, 8);
+
+    return {
+      intent,
+      label: "本周重点",
+      title: "本周最该盯住的事",
+      summary: `本周重点按高优先级和本周截止排序，共筛出 ${primaryTasks.length || activeTasks.length} 件；如果没有本周截止任务，则回退到当前未完成任务。`,
+      taskSectionTitle: "本周重点",
+      metrics: baseMetrics,
+      primaryTasks: primaryTasks.length > 0 ? primaryTasks : activeTasks.slice().sort(sortAssistantTasksByFocus).slice(0, 8),
+      projectGroups,
+      memoryHints,
+      recentLogs: createAssistantLogScope(normalizedLogs, "week", now),
+      keywords,
+      generatedAt: now.toISOString(),
+    };
+  }
+
+  if (intent === "waiting") {
+    const primaryTasks = waitingTasks.slice().sort(sortAssistantTasksByFocus).slice(0, 8);
+
+    return {
+      intent,
+      label: "等待跟进",
+      title: "卡在他人回复的事",
+      summary: `当前等待他人的任务有 ${waitingTasks.length} 件；这些事项适合集中催办或补一条跟进日志。`,
+      taskSectionTitle: "等待他人",
+      metrics: baseMetrics,
+      primaryTasks,
+      projectGroups,
+      memoryHints,
+      recentLogs: createAssistantLogScope(normalizedLogs, "week", now),
+      keywords,
+      generatedAt: now.toISOString(),
+    };
+  }
+
+  if (intent === "stale") {
+    const taskById = new Map(activeTasks.map((task) => [task.id, task]));
+    const suggestions = createTaskOrganizingSuggestions(normalizedTasks, now);
+    const primaryTasks = suggestions.staleTasks
+      .map((item) => taskById.get(item.task.id))
+      .filter(Boolean)
+      .slice(0, 8);
+
+    return {
+      intent,
+      label: "长期未完成",
+      title: "需要重新确认的旧任务",
+      summary: `发现 ${primaryTasks.length} 件长期没有更新的任务；建议确认是否继续推进、降级，或取消。`,
+      taskSectionTitle: "长期未更新",
+      metrics: baseMetrics,
+      primaryTasks,
+      projectGroups,
+      memoryHints,
+      recentLogs: createAssistantLogScope(normalizedLogs, "month", now),
+      keywords,
+      generatedAt: now.toISOString(),
+    };
+  }
+
+  if (intent === "progress") {
+    const matchedTasks = keywords.length > 0
+      ? normalizedTasks.filter((task) => matchesAssistantKeywords(getTaskSearchText(task), keywords))
+      : normalizedTasks;
+    const matchedTaskIds = new Set(matchedTasks.map((task) => task.id));
+    const matchedLogs = normalizedLogs
+      .filter((log) => matchedTaskIds.has(log.taskId) || matchesAssistantKeywords(getLogSearchText(log), keywords))
+      .slice()
+      .sort((left, right) => getFiniteTime(right.createdAt) - getFiniteTime(left.createdAt))
+      .slice(0, 8);
+    const activeMatchedTasks = matchedTasks.filter((task) => isActiveTask(task));
+    const completedMatchedTasks = matchedTasks.filter((task) => task.status === "done");
+
+    return {
+      intent,
+      label: "进展查询",
+      title: keywords.length > 0 ? `${keywords.join(" / ")} 的进展` : "相关事项进展",
+      summary: `共找到 ${matchedTasks.length} 件相关任务：未完成 ${activeMatchedTasks.length} 件、已完成 ${completedMatchedTasks.length} 件、最近日志 ${matchedLogs.length} 条。`,
+      taskSectionTitle: "相关任务",
+      metrics: {
+        ...baseMetrics,
+        matched: matchedTasks.length,
+      },
+      primaryTasks: matchedTasks.slice().sort(sortAssistantTasksByFocus).slice(0, 8),
+      projectGroups,
+      memoryHints,
+      recentLogs: matchedLogs,
+      keywords,
+      generatedAt: now.toISOString(),
+    };
+  }
+
+  return {
+    intent,
+    label: "工作概览",
+    title: "当前工作态势",
+    summary: `现在有 ${activeTasks.length} 件未完成任务，${overdueTasks.length} 件逾期，${waitingTasks.length} 件等待他人。`,
+    taskSectionTitle: "建议关注",
+    metrics: baseMetrics,
+    primaryTasks: activeTasks.slice().sort(sortAssistantTasksByFocus).slice(0, 8),
+    projectGroups,
+    memoryHints,
+    recentLogs: createAssistantLogScope(normalizedLogs, "week", now),
+    keywords,
+    generatedAt: now.toISOString(),
   };
 }

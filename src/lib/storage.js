@@ -1,3 +1,5 @@
+import { DEFAULT_FTP_CLIENT_PATH } from "./domain.js";
+
 const fallbackStorageKey = "sherlly-assistant:v1";
 const scopedFallbackStoragePrefix = "sherlly-assistant:v1:data";
 const migrationStoragePrefix = "sherlly-assistant:v1:migrated";
@@ -13,6 +15,7 @@ export const initialData = {
   vaultItems: [],
   settings: {
     soundEnabled: true,
+    ftpClientPath: DEFAULT_FTP_CLIENT_PATH,
   },
 };
 

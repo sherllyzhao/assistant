@@ -8,6 +8,7 @@ import {
   Copy,
   Download,
   Eye,
+  ExternalLink,
   FileText,
   Filter,
   Image as ImageIcon,
@@ -35,6 +36,7 @@ import {
   candidateToDraft,
   createLog,
   createDailySlotReminderRecord,
+  createAiWorkspaceAnswer,
   createTask,
   createId,
   dailySlots,
@@ -43,6 +45,7 @@ import {
   createAttachment,
   createTaskOrganizingSuggestions,
   createVaultPlaintext,
+  DEFAULT_FTP_CLIENT_PATH,
   emptyTaskDraft,
   emptyVaultDraft,
   filterLogsByRange,
@@ -54,6 +57,7 @@ import {
   getReminderIntervalMinutes,
   getStatusMeta,
   getTaskReminderAt,
+  getTaskReminderWindow,
   isActiveTask,
   isOverdue,
   launchActionTypes,
@@ -64,6 +68,7 @@ import {
   normalizeDailySlotReminderRecords,
   normalizeDailyTarget,
   normalizeDailySlots,
+  normalizeReminderWindow,
   normalizeTags,
   normalizeVaultItem,
   normalizeVaultItems,
@@ -120,8 +125,17 @@ const ownerOptions = [
 
 const viewOptions = [
   { value: "tasks", label: "任务看板", description: "录入、筛选和推进待办" },
+  { value: "assistant", label: "AI工作台", description: "询问今日、本周和项目进展" },
   { value: "vault", label: "安全速记", description: "保存账号、密码和密钥" },
   { value: "report", label: "工作日报", description: "查看日报概览与日志明细" },
+];
+
+const assistantQuestionPresets = [
+  "今天还有什么没完成？",
+  "本周最重要的事情是什么？",
+  "等待他人的事情有哪些？",
+  "王总的事情进展如何？",
+  "长期没推进的任务有哪些？",
 ];
 
 const cloudSyncEnabled = Boolean(import.meta.env.VITE_SHERLLY_API_URL);
@@ -227,8 +241,11 @@ function formatIcsDate(value) {
 }
 
 function createTaskCalendarText(task) {
-  const start = new Date(task.dueAt);
-  const end = new Date(start.getTime() + 30 * 60 * 1000);
+  const reminderWindow = getTaskReminderWindow(task);
+  const start = new Date(reminderWindow.reminderStartAt || task.dueAt);
+  const end = reminderWindow.reminderEndAt
+    ? new Date(reminderWindow.reminderEndAt)
+    : new Date(start.getTime() + 30 * 60 * 1000);
   const reminderMinutes = getReminderIntervalMinutes(task);
   const uid = `${task.id || Date.now()}@sherlly-assistant`;
   const description = [task.note, task.owner ? `负责人：${task.owner}` : "", task.source ? `来源：${task.source}` : ""]
@@ -268,14 +285,27 @@ function getSafeFilename(value) {
   );
 }
 
+function formatReminderWindow(task) {
+  const reminderWindow = getTaskReminderWindow(task);
+
+  if (!reminderWindow.reminderStartAt || !reminderWindow.reminderEndAt) {
+    return "";
+  }
+
+  return `${formatDateTime(reminderWindow.reminderStartAt)} - ${formatDateTime(reminderWindow.reminderEndAt)}`;
+}
+
 function taskToDraft(task) {
   const tags = Array.isArray(task.tags) ? task.tags : [];
+  const reminderWindow = getTaskReminderWindow(task);
 
   return {
     title: task.title || "",
     source: task.source || "手动录入",
     owner: task.owner || "",
     dueAt: toDateTimeInputValue(task.dueAt),
+    reminderStartAt: toDateTimeInputValue(reminderWindow.reminderStartAt),
+    reminderEndAt: toDateTimeInputValue(reminderWindow.reminderEndAt),
     dailyTarget: normalizeDailyTarget(task.dailyTarget),
     dailySlotValues: normalizeDailySlots(task.dailySlots, task.dailyTarget),
     launchAction: normalizeLaunchAction(task.launchAction),
@@ -296,6 +326,24 @@ function taskToCopyDraft(task) {
       id: createId("attachment"),
     })),
   };
+}
+
+function getVaultFtpClientPath(settings) {
+  return String(settings?.ftpClientPath || "").trim() || DEFAULT_FTP_CLIENT_PATH;
+}
+
+function isFtpVaultTarget(item, url) {
+  return item?.category === "ftp" || /^(ftp|sftp):\/\//i.test(String(url || "").trim());
+}
+
+function getVaultBrowserUrl(url) {
+  const target = String(url || "").trim();
+
+  if (!target || /^[a-z][a-z\d+.-]*:/i.test(target)) {
+    return target;
+  }
+
+  return `https://${target}`;
 }
 
 function App() {
@@ -322,6 +370,7 @@ function App() {
   const [vaultStatus, setVaultStatus] = useState({ type: "", message: "" });
   const [wechatText, setWechatText] = useState("");
   const [activeView, setActiveView] = useState("tasks");
+  const [assistantQuestion, setAssistantQuestion] = useState(assistantQuestionPresets[0]);
   const [taskFilter, setTaskFilter] = useState("active");
   const [searchQuery, setSearchQuery] = useState("");
   const [logRange, setLogRange] = useState("today");
@@ -496,11 +545,12 @@ function App() {
 
       for (const task of data.tasks) {
         if (shouldRemindTask(task, now)) {
+          const reminderWindowLabel = formatReminderWindow(task);
           remindedTaskIds.push(task.id);
           notifyWithFallback({
             id: `task_${task.id}_${now.getTime()}`,
             title: `${getPriorityMeta(task.priority).label}提醒`,
-            body: `${task.title} · ${formatDateTime(task.dueAt)}`,
+            body: `${task.title} · ${reminderWindowLabel || formatDateTime(task.dueAt)}`,
             sound: data.settings.soundEnabled,
             flash: true,
           });
@@ -769,6 +819,10 @@ function App() {
     () => createDailyReport(data.tasks, data.logs, logRange, currentTime),
     [currentTime, data.logs, data.tasks, logRange],
   );
+  const aiWorkspaceAnswer = useMemo(
+    () => createAiWorkspaceAnswer(data.tasks, data.logs, assistantQuestion, currentTime),
+    [assistantQuestion, currentTime, data.logs, data.tasks],
+  );
   const organizingSuggestions = useMemo(
     () => createTaskOrganizingSuggestions(data.tasks, currentTime),
     [currentTime, data.tasks],
@@ -924,7 +978,8 @@ function App() {
       logs: [...current.logs, createLog("创建任务", task, "手机速记")],
     }));
     setMobileQuickText("");
-    setMobileCaptureStatus(task.dueAt ? `已创建：${formatDateTime(task.dueAt)}` : "已创建任务");
+    const createdTimeLabel = formatReminderWindow(task) || (task.dueAt ? formatDateTime(task.dueAt) : "");
+    setMobileCaptureStatus(createdTimeLabel ? `已创建：${createdTimeLabel}` : "已创建任务");
   }
 
   function submitMobileQuickTask(event) {
@@ -1245,6 +1300,16 @@ function App() {
     setVaultDraft((current) => ({ ...current, [field]: value }));
   }
 
+  function updateVaultFtpClientPath(value) {
+    setData((current) => ({
+      ...current,
+      settings: {
+        ...current.settings,
+        ftpClientPath: value,
+      },
+    }));
+  }
+
   function resetVaultDraft() {
     setVaultDraft(emptyVaultDraft);
     setVaultEditingId("");
@@ -1422,6 +1487,47 @@ function App() {
     }
   }
 
+  async function openVaultTarget(item) {
+    const unlocked = vaultUnlockedItems[item.id];
+    const url = String(unlocked?.url || "").trim();
+    const isFtpTarget = isFtpVaultTarget(item, url);
+
+    if (!unlocked) {
+      setVaultStatus({ type: "error", message: "请先解锁这条安全速记，再打开关联地址。" });
+      return;
+    }
+
+    if (!isFtpTarget && !url) {
+      setVaultStatus({ type: "error", message: "这条安全速记没有可打开的网址。" });
+      return;
+    }
+
+    const action = isFtpTarget
+      ? { type: "path", target: getVaultFtpClientPath(data.settings) }
+      : { type: "url", target: getVaultBrowserUrl(url) };
+
+    try {
+      const result = await launchAction(action);
+      const now = new Date();
+      const detail = result?.ok
+        ? isFtpTarget
+          ? "已打开 FTP 客户端，日志不记录敏感内容"
+          : "已打开浏览器网址，日志不记录网址内容"
+        : `打开失败：${result?.message || "未知错误"}`;
+
+      setData((current) => ({
+        ...current,
+        logs: [...current.logs, createLog(result?.ok ? "打开安全速记" : "修改安全速记", item, detail, now)],
+      }));
+      setVaultStatus({
+        type: result?.ok ? "success" : "error",
+        message: result?.ok ? (isFtpTarget ? "已打开 FTP 客户端。" : "已用浏览器打开网址。") : detail,
+      });
+    } catch (error) {
+      setVaultStatus({ type: "error", message: error.message || "打开失败，请检查目标路径或网址。" });
+    }
+  }
+
   function deleteVaultItem(item) {
     const now = new Date();
 
@@ -1568,13 +1674,16 @@ function App() {
           }
 
           const dailySlotValues = normalizeDailySlots(draft.dailySlotValues, draft.dailyTarget);
+          const reminderWindow = normalizeReminderWindow(draft.reminderStartAt, draft.reminderEndAt);
 
           updatedTask = {
             ...task,
             title: draft.title.trim(),
             source: draft.source.trim(),
             owner: draft.owner.trim(),
-            dueAt: draft.dueAt ? new Date(draft.dueAt).toISOString() : "",
+            dueAt: draft.dueAt ? new Date(draft.dueAt).toISOString() : reminderWindow.reminderEndAt,
+            reminderStartAt: reminderWindow.reminderStartAt,
+            reminderEndAt: reminderWindow.reminderEndAt,
             dailySlots: dailySlotValues,
             dailyTarget: dailySlotValues.length,
             launchAction: normalizeLaunchAction(draft.launchAction),
@@ -2177,7 +2286,9 @@ function App() {
                 ? "个人信息"
                 : activeView === "vault"
                   ? "安全速记"
-                  : "工作日报"
+                  : activeView === "assistant"
+                    ? "AI工作台"
+                    : "工作日报"
           }
         >
           {activeView === "tasks" ? (
@@ -2248,6 +2359,7 @@ function App() {
               cryptoSupported={hasVaultCryptoSupport()}
               draft={vaultDraft}
               editingId={vaultEditingId}
+              ftpClientPath={String(data.settings?.ftpClientPath ?? DEFAULT_FTP_CLIENT_PATH)}
               items={filteredVaultItems}
               masterPassword={vaultMasterPassword}
               onCancelEdit={resetVaultDraft}
@@ -2255,8 +2367,10 @@ function App() {
               onCopyValue={copyVaultValue}
               onDeleteItem={deleteVaultItem}
               onEditItem={editVaultItem}
+              onFtpClientPathChange={updateVaultFtpClientPath}
               onLockItem={lockVaultItem}
               onMasterPasswordChange={setVaultMasterPassword}
+              onOpenTarget={openVaultTarget}
               onSearchChange={setVaultSearchQuery}
               onSubmit={submitVaultItem}
               onUnlockItem={unlockVaultItem}
@@ -2265,6 +2379,15 @@ function App() {
               stats={vaultStats}
               status={vaultStatus}
               unlockedItems={vaultUnlockedItems}
+            />
+          ) : activeView === "assistant" ? (
+            <AiWorkspacePanel
+              answer={aiWorkspaceAnswer}
+              onAskPreset={setAssistantQuestion}
+              onPreviewAttachment={previewAttachment}
+              onQuestionChange={setAssistantQuestion}
+              onViewTask={(task) => setDetailTaskId(task.id)}
+              question={assistantQuestion}
             />
           ) : (
             <ReportPanel
@@ -2369,6 +2492,28 @@ function App() {
                   onChange={(event) => updateDraft("dueAt", event.target.value)}
                 />
               </label>
+
+              <fieldset className="reminder-window-fieldset">
+                <legend>预定提醒（可选）</legend>
+                <div className="form-grid">
+                  <label>
+                    开始
+                    <input
+                      type="datetime-local"
+                      value={draft.reminderStartAt}
+                      onChange={(event) => updateDraft("reminderStartAt", event.target.value)}
+                    />
+                  </label>
+                  <label>
+                    结束
+                    <input
+                      type="datetime-local"
+                      value={draft.reminderEndAt}
+                      onChange={(event) => updateDraft("reminderEndAt", event.target.value)}
+                    />
+                  </label>
+                </div>
+              </fieldset>
 
               <fieldset className="slot-fieldset">
                 <legend>每日时段（可选）</legend>
@@ -2684,6 +2829,7 @@ function VaultPanel({
   cryptoSupported,
   draft,
   editingId,
+  ftpClientPath,
   items,
   masterPassword,
   onCancelEdit,
@@ -2691,8 +2837,10 @@ function VaultPanel({
   onCopyValue,
   onDeleteItem,
   onEditItem,
+  onFtpClientPathChange,
   onLockItem,
   onMasterPasswordChange,
+  onOpenTarget,
   onSearchChange,
   onSubmit,
   onUnlockItem,
@@ -2717,15 +2865,25 @@ function VaultPanel({
           <strong>保险箱主密码</strong>
           <p>主密码只用于本次加密/解锁，不会保存到本地或云端。忘记后无法解密旧内容。</p>
         </div>
-        <label>
-          主密码
-          <input
-            type="password"
-            value={masterPassword}
-            onChange={(event) => onMasterPasswordChange(event.target.value)}
-            placeholder="至少 6 位，用来加密和解锁"
-          />
-        </label>
+        <div className="vault-guard-fields">
+          <label>
+            主密码
+            <input
+              type="password"
+              value={masterPassword}
+              onChange={(event) => onMasterPasswordChange(event.target.value)}
+              placeholder="至少 6 位，用来加密和解锁"
+            />
+          </label>
+          <label>
+            FTP 客户端路径
+            <input
+              value={ftpClientPath}
+              onChange={(event) => onFtpClientPathChange(event.target.value)}
+              placeholder={DEFAULT_FTP_CLIENT_PATH}
+            />
+          </label>
+        </div>
       </section>
 
       {!cryptoSupported ? (
@@ -2865,6 +3023,7 @@ function VaultPanel({
                   onDeleteItem={onDeleteItem}
                   onEditItem={onEditItem}
                   onLockItem={onLockItem}
+                  onOpenTarget={onOpenTarget}
                   onUnlockItem={onUnlockItem}
                   unlocked={unlockedItems[item.id]}
                 />
@@ -2877,9 +3036,11 @@ function VaultPanel({
   );
 }
 
-function VaultItemCard({ item, onCopyValue, onDeleteItem, onEditItem, onLockItem, onUnlockItem, unlocked }) {
+function VaultItemCard({ item, onCopyValue, onDeleteItem, onEditItem, onLockItem, onOpenTarget, onUnlockItem, unlocked }) {
   const category = vaultCategories.find((option) => option.value === item.category) || vaultCategories[vaultCategories.length - 1];
   const tags = Array.isArray(item.tags) ? item.tags : [];
+  const hasOpenTarget = Boolean(unlocked && (unlocked.url || item.category === "ftp"));
+  const openButtonLabel = isFtpVaultTarget(item, unlocked?.url) ? "打开 FTP" : "打开网址";
 
   return (
     <article className="vault-item">
@@ -2932,6 +3093,12 @@ function VaultItemCard({ item, onCopyValue, onDeleteItem, onEditItem, onLockItem
         <button type="button" onClick={() => onCopyValue(item, "password", "密码")} disabled={!unlocked}>
           复制密码
         </button>
+        {hasOpenTarget ? (
+          <button type="button" onClick={() => onOpenTarget(item)}>
+            <ExternalLink size={15} />
+            {openButtonLabel}
+          </button>
+        ) : null}
         <button type="button" onClick={() => onEditItem(item)}>
           编辑
         </button>
@@ -2939,6 +3106,169 @@ function VaultItemCard({ item, onCopyValue, onDeleteItem, onEditItem, onLockItem
           删除
         </button>
       </div>
+    </article>
+  );
+}
+
+function AiWorkspacePanel({ answer, onAskPreset, onPreviewAttachment, onQuestionChange, onViewTask, question }) {
+  const metrics = [
+    answer.metrics?.matched != null ? { label: "相关", value: answer.metrics.matched } : null,
+    { label: "未完成", value: answer.metrics?.active || 0 },
+    { label: "逾期", value: answer.metrics?.overdue || 0 },
+    { label: "等待他人", value: answer.metrics?.waiting || 0 },
+    { label: "已完成", value: answer.metrics?.completed || 0 },
+  ].filter(Boolean);
+
+  function handleSubmit(event) {
+    event.preventDefault();
+  }
+
+  return (
+    <div className="ai-workspace-panel">
+      <div className="section-toolbar ai-workspace-toolbar">
+        <div>
+          <p className="eyebrow">AI Workspace</p>
+          <h2>AI工作台</h2>
+        </div>
+        <MessageSquareText size={20} />
+      </div>
+
+      <form className="ai-question-box" onSubmit={handleSubmit}>
+        <MessageSquareText size={18} />
+        <input
+          aria-label="AI工作台问题"
+          value={question}
+          onChange={(event) => onQuestionChange(event.target.value)}
+          placeholder="今天还有什么没完成？"
+        />
+        <button className="primary-button" type="submit">
+          <Search size={16} />
+          分析
+        </button>
+      </form>
+
+      <div className="ai-presets" aria-label="常用问题">
+        {assistantQuestionPresets.map((preset) => (
+          <button
+            className={preset === question ? "is-active" : ""}
+            key={preset}
+            type="button"
+            onClick={() => onAskPreset(preset)}
+          >
+            {preset}
+          </button>
+        ))}
+      </div>
+
+      <section className="ai-answer-card">
+        <div className="ai-answer-heading">
+          <div>
+            <span>{answer.label}</span>
+            <strong>{answer.title}</strong>
+          </div>
+          <em>{formatDateTime(answer.generatedAt)}</em>
+        </div>
+        <p>{answer.summary}</p>
+        <div className="report-metrics">
+          {metrics.map((metric) => (
+            <span key={metric.label}>
+              {metric.label} {metric.value}
+            </span>
+          ))}
+        </div>
+      </section>
+
+      <div className="ai-workspace-grid">
+        <article className="report-section">
+          <strong>{answer.taskSectionTitle}</strong>
+          <ReportTaskList
+            emptyText="没有匹配到任务。"
+            onPreviewAttachment={onPreviewAttachment}
+            onViewTask={onViewTask}
+            tasks={answer.primaryTasks || []}
+          />
+        </article>
+
+        <AiProjectGroups groups={answer.projectGroups || []} onViewTask={onViewTask} />
+      </div>
+
+      <div className="ai-workspace-grid secondary">
+        <AiMemoryHints hints={answer.memoryHints || []} />
+        <AiRecentLogs logs={answer.recentLogs || []} />
+      </div>
+    </div>
+  );
+}
+
+function AiProjectGroups({ groups, onViewTask }) {
+  return (
+    <article className="report-section">
+      <strong>项目归类</strong>
+      {groups.length === 0 ? (
+        <EmptyState icon={<ClipboardList size={22} />} text="暂无可归类项目" />
+      ) : (
+        <div className="ai-project-list">
+          {groups.map((group) => (
+            <section className="ai-project-group" key={group.name}>
+              <div className="ai-project-heading">
+                <strong>{group.name}</strong>
+                <span>{group.total} 件</span>
+              </div>
+              <div className="ai-project-meta">
+                <span>高优先级 {group.high}</span>
+                <span>逾期 {group.overdue}</span>
+                <span>等待 {group.waiting}</span>
+              </div>
+              <div className="organizing-task-list">
+                {group.tasks.map((task) => (
+                  <OrganizingTaskButton key={task.id} onViewTask={onViewTask} task={task} />
+                ))}
+              </div>
+            </section>
+          ))}
+        </div>
+      )}
+    </article>
+  );
+}
+
+function AiMemoryHints({ hints }) {
+  return (
+    <article className="report-section">
+      <strong>工作记忆</strong>
+      {hints.length === 0 ? (
+        <EmptyState icon={<Wand2 size={22} />} text="暂无稳定记忆线索" />
+      ) : (
+        <div className="ai-memory-list">
+          {hints.map((hint) => (
+            <section className="ai-memory-item" key={`${hint.title}:${hint.detail}`}>
+              <strong>{hint.title}</strong>
+              <p>{hint.detail}</p>
+            </section>
+          ))}
+        </div>
+      )}
+    </article>
+  );
+}
+
+function AiRecentLogs({ logs }) {
+  return (
+    <article className="report-section">
+      <strong>最近日志</strong>
+      {logs.length === 0 ? (
+        <EmptyState icon={<FileText size={22} />} text="没有匹配日志" />
+      ) : (
+        <div className="log-list compact">
+          {logs.map((log) => (
+            <article className="log-item" key={log.id}>
+              <strong>{log.action}</strong>
+              <span>{formatDateTime(log.createdAt)}</span>
+              <p>{log.taskTitle || log.detail}</p>
+            </article>
+          ))}
+        </div>
+      )}
     </article>
   );
 }
@@ -3308,6 +3638,7 @@ function MobileTaskCard({ task, now, onAddToCalendar, onCompleteTask, onStartTas
   const status = getStatusMeta(task.status);
   const dailyProgress = getDailyProgress(task, now);
   const reminderAt = getTaskReminderAt(task);
+  const reminderWindowLabel = formatReminderWindow(task);
 
   return (
     <article className={`mobile-task-card priority-${task.priority}`}>
@@ -3323,7 +3654,12 @@ function MobileTaskCard({ task, now, onAddToCalendar, onCompleteTask, onStartTas
             {formatDateTime(task.dueAt)}
           </span>
         ) : null}
-        {reminderAt ? (
+        {reminderWindowLabel ? (
+          <span>
+            <Bell size={14} />
+            {reminderWindowLabel}
+          </span>
+        ) : reminderAt ? (
           <span>
             <Bell size={14} />
             {formatDateTime(reminderAt)}
@@ -3615,6 +3951,7 @@ function ReportTaskItem({ task, onPreviewAttachment, onViewTask }) {
   const attachments = normalizeAttachments(task.attachments);
   const priority = getPriorityMeta(task.priority);
   const status = getStatusMeta(task.status);
+  const reminderWindowLabel = formatReminderWindow(task);
 
   return (
     <article className="report-task-item">
@@ -3633,6 +3970,7 @@ function ReportTaskItem({ task, onPreviewAttachment, onViewTask }) {
           <em>{status.label}</em>
           <em>{priority.label}</em>
           {task.dueAt ? <em>{formatDateTime(task.dueAt)}</em> : null}
+          {reminderWindowLabel ? <em>{reminderWindowLabel}</em> : null}
           {attachments.length > 0 ? <em>附件 {attachments.length}</em> : null}
         </span>
       </button>
@@ -3667,6 +4005,7 @@ function TaskDetailDialog({ task, now, onAddToCalendar, onClose, onCopy, onEdit,
   const dailyProgress = getDailyProgress(task, now);
   const tags = Array.isArray(task.tags) ? task.tags : [];
   const reminderAt = getTaskReminderAt(task);
+  const reminderWindowLabel = formatReminderWindow(task);
   const launchActionValue = normalizeLaunchAction(task.launchAction);
   const launchActionMeta = launchActionTypes.find((item) => item.value === launchActionValue.type);
 
@@ -3700,7 +4039,12 @@ function TaskDetailDialog({ task, now, onAddToCalendar, onClose, onCopy, onEdit,
           ) : (
             <span>未设置截止时间</span>
           )}
-          {reminderAt ? (
+          {reminderWindowLabel ? (
+            <span>
+              <Bell size={14} />
+              预定提醒 · {reminderWindowLabel}
+            </span>
+          ) : reminderAt ? (
             <span>
               <Bell size={14} />
               提前{getReminderIntervalMinutes(task)}分钟提醒 · 从 {formatDateTime(reminderAt)} 开始
@@ -3875,6 +4219,7 @@ function TaskRow({
   const dailyProgress = getDailyProgress(task, now);
   const isScheduledTask = dailyProgress.isScheduled;
   const reminderAt = getTaskReminderAt(task);
+  const reminderWindowLabel = formatReminderWindow(task);
   const taskAttachments = normalizeAttachments(task.attachments);
   const openEditor = () => onEdit(task);
   const stopRowClick = (event) => event.stopPropagation();
@@ -3910,7 +4255,12 @@ function TaskRow({
             <CalendarClock size={14} />
             {formatDateTime(task.dueAt)}
           </span>
-          {reminderAt ? (
+          {reminderWindowLabel ? (
+            <span>
+              <Bell size={14} />
+              预定提醒 · {reminderWindowLabel}
+            </span>
+          ) : reminderAt ? (
             <span>
               <Bell size={14} />
               提前{getReminderIntervalMinutes(task)}分钟提醒 · 从 {formatDateTime(reminderAt)} 开始

@@ -1010,6 +1010,7 @@ button:disabled {
 }
 
 .slot-fieldset,
+.reminder-window-fieldset,
 .action-fieldset,
 .attachment-fieldset {
   display: grid;
@@ -1020,6 +1021,7 @@ button:disabled {
 }
 
 .slot-fieldset legend,
+.reminder-window-fieldset legend,
 .action-fieldset legend,
 .attachment-fieldset legend {
   padding: 0;
@@ -1029,6 +1031,7 @@ button:disabled {
 }
 
 .slot-fieldset p,
+.reminder-window-fieldset p,
 .action-fieldset p,
 .attachment-fieldset p {
   margin: 0;
@@ -1037,6 +1040,7 @@ button:disabled {
   line-height: 1.45;
 }
 
+.reminder-window-fieldset .form-grid,
 .action-fieldset .form-grid {
   margin-top: 9px;
 }
@@ -1232,6 +1236,10 @@ textarea:focus {
   min-height: 420px;
 }
 
+.ai-workspace-panel {
+  min-height: 420px;
+}
+
 .profile-panel {
   min-height: 420px;
 }
@@ -1302,6 +1310,12 @@ textarea:focus {
   line-height: 1.55;
 }
 
+.vault-guard-fields {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
 .profile-card > strong {
   display: block;
   margin-bottom: 12px;
@@ -1360,7 +1374,9 @@ textarea:focus {
 .vault-fields div {
   display: grid;
   grid-template-columns: 64px minmax(0, 1fr);
+  align-items: center;
   gap: 10px;
+  min-height: 42px;
   padding: 8px 10px;
   background: var(--surface);
   border: 1px solid var(--line);
@@ -1387,6 +1403,10 @@ textarea:focus {
 }
 
 .vault-item-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   min-height: 32px;
   padding: 0 10px;
   color: var(--ink);
@@ -1394,6 +1414,10 @@ textarea:focus {
   border: 1px solid var(--line);
   border-radius: 8px;
   font-weight: 800;
+}
+
+.vault-item-actions button svg {
+  flex: 0 0 auto;
 }
 
 .vault-item-actions button:hover:not(:disabled) {
@@ -1472,8 +1496,187 @@ textarea:focus {
   border: 1px solid rgba(201, 71, 56, 0.24);
 }
 
+.ai-workspace-toolbar svg,
 .report-toolbar svg {
   color: var(--accent);
+}
+
+.ai-question-box {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+  padding: 10px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.ai-question-box > svg {
+  color: var(--accent);
+}
+
+.ai-question-box input {
+  min-width: 0;
+  border-color: transparent;
+  background: transparent;
+}
+
+.ai-question-box input:focus {
+  box-shadow: none;
+}
+
+.ai-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.ai-presets button {
+  min-height: 32px;
+  padding: 0 10px;
+  color: var(--muted);
+  background: var(--surface-muted);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.ai-presets button:hover,
+.ai-presets button.is-active {
+  color: var(--accent-strong);
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.ai-answer-card {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 12px;
+  padding: 14px;
+  background: var(--surface);
+  border: 1px solid rgba(18, 113, 95, 0.22);
+  border-radius: 8px;
+}
+
+.ai-answer-heading,
+.ai-project-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.ai-answer-heading div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.ai-answer-heading span {
+  color: var(--accent-strong);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.ai-answer-heading strong {
+  font-size: 17px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.ai-answer-heading em {
+  color: var(--muted);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.ai-answer-card p {
+  margin: 0;
+  color: var(--ink);
+  line-height: 1.65;
+}
+
+.ai-workspace-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.ai-workspace-grid.secondary {
+  margin-bottom: 0;
+}
+
+.ai-project-list,
+.ai-memory-list {
+  display: grid;
+  gap: 9px;
+}
+
+.ai-project-group,
+.ai-memory-item {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  background: rgba(238, 243, 239, 0.46);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.ai-project-heading strong,
+.ai-memory-item strong {
+  font-size: 13px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.ai-project-heading span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 0 8px;
+  color: var(--accent-strong);
+  background: var(--accent-soft);
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.ai-project-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.ai-project-meta span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 0 7px;
+  color: var(--muted);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.ai-memory-item p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.log-list.compact {
+  gap: 8px;
 }
 
 .report-range {
@@ -2314,6 +2517,7 @@ textarea:focus {
     grid-template-columns: 1fr;
   }
 
+  .ai-workspace-grid,
   .report-grid {
     grid-template-columns: 1fr;
   }
@@ -2425,7 +2629,7 @@ textarea:focus {
   }
 
   .view-switcher {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 6px;
     margin-bottom: 10px;
     padding: 5px;
@@ -2456,6 +2660,7 @@ textarea:focus {
 
   .task-area,
   .panel,
+  .ai-answer-card,
   .profile-card,
   .vault-card,
   .vault-guard,
@@ -2485,6 +2690,24 @@ textarea:focus {
 
   .search-box {
     min-height: 42px;
+  }
+
+  .ai-question-box {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .ai-question-box .primary-button {
+    grid-column: 1 / -1;
+    width: 100%;
+  }
+
+  .ai-answer-heading,
+  .ai-project-heading {
+    align-items: flex-start;
+  }
+
+  .ai-answer-heading em {
+    white-space: normal;
   }
 
   .segmented-control {
