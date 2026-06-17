@@ -9,6 +9,7 @@ const PORT = Number.parseInt(process.env.PORT || "8787", 10);
 const MONGODB_URI = process.env.MONGODB_URI;
 const MONGODB_DB = process.env.MONGODB_DB || "sherlly";
 const MONGODB_COLLECTION = process.env.MONGODB_COLLECTION || "appData";
+const MONGODB_BACKUPS_COLLECTION = process.env.MONGODB_BACKUPS_COLLECTION || "appDataBackups";
 const MONGODB_USERS_COLLECTION = process.env.MONGODB_USERS_COLLECTION || "users";
 const MONGODB_SESSIONS_COLLECTION = process.env.MONGODB_SESSIONS_COLLECTION || "sessions";
 const MONGODB_SERVER_SELECTION_TIMEOUT_MS = Number.parseInt(
@@ -47,6 +48,57 @@ function normalizeData(data) {
       ...(data?.settings && typeof data.settings === "object" ? data.settings : {}),
     },
   };
+}
+
+function hasOwnField(data, field) {
+  return Boolean(data && Object.prototype.hasOwnProperty.call(data, field));
+}
+
+function normalizeDataForSave(data, currentData = defaultData) {
+  const current = normalizeData(currentData);
+
+  return {
+    tasks: hasOwnField(data, "tasks") ? (Array.isArray(data.tasks) ? data.tasks : []) : current.tasks,
+    candidates: hasOwnField(data, "candidates")
+      ? (Array.isArray(data.candidates) ? data.candidates : [])
+      : current.candidates,
+    logs: hasOwnField(data, "logs") ? (Array.isArray(data.logs) ? data.logs : []) : current.logs,
+    vaultItems: hasOwnField(data, "vaultItems")
+      ? (Array.isArray(data.vaultItems) ? data.vaultItems : [])
+      : current.vaultItems,
+    settings: {
+      ...current.settings,
+      ...(hasOwnField(data, "settings") && data.settings && typeof data.settings === "object" ? data.settings : {}),
+    },
+  };
+}
+
+function hasMeaningfulData(data) {
+  const normalized = normalizeData(data);
+  return (
+    normalized.tasks.length > 0 ||
+    normalized.candidates.length > 0 ||
+    normalized.logs.length > 0 ||
+    normalized.vaultItems.length > 0
+  );
+}
+
+function isSameData(left, right) {
+  return JSON.stringify(normalizeData(left)) === JSON.stringify(normalizeData(right));
+}
+
+function shouldBackupBeforeSave(currentData, nextData) {
+  const current = normalizeData(currentData);
+  const next = normalizeData(nextData);
+
+  return (
+    hasMeaningfulData(current) &&
+    !isSameData(current, next) &&
+    (next.tasks.length < current.tasks.length ||
+      next.candidates.length < current.candidates.length ||
+      next.logs.length < current.logs.length ||
+      next.vaultItems.length < current.vaultItems.length)
+  );
 }
 
 function normalizeUserId(value) {
@@ -90,6 +142,11 @@ async function ensureIndexes() {
 
       await Promise.all([
         database.collection(MONGODB_COLLECTION).createIndex({ userId: 1 }),
+        database.collection(MONGODB_BACKUPS_COLLECTION).createIndex({ userId: 1, backedUpAt: -1 }),
+        database.collection(MONGODB_BACKUPS_COLLECTION).createIndex(
+          { expiresAt: 1 },
+          { expireAfterSeconds: 0 },
+        ),
         database.collection(MONGODB_USERS_COLLECTION).createIndex({ username: 1 }, { unique: true }),
         database.collection(MONGODB_SESSIONS_COLLECTION).createIndex({ tokenHash: 1 }, { unique: true }),
         database.collection(MONGODB_SESSIONS_COLLECTION).createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }),
@@ -133,8 +190,24 @@ async function loadData(userId) {
 async function saveData(userId, data) {
   await ensureIndexes();
   const collection = await getCollection();
-  const normalized = normalizeData(data);
+  const document = await collection.findOne({ userId });
+  const currentData = document?.data || defaultData;
+  const normalized = normalizeDataForSave(data, currentData);
   const now = new Date();
+
+  if (shouldBackupBeforeSave(currentData, normalized)) {
+    const database = await getDatabase();
+    const expiresAt = new Date(now);
+    expiresAt.setDate(expiresAt.getDate() + 30);
+
+    await database.collection(MONGODB_BACKUPS_COLLECTION).insertOne({
+      userId,
+      data: normalizeData(currentData),
+      backedUpAt: now,
+      expiresAt,
+      reason: "before-destructive-save",
+    });
+  }
 
   await collection.updateOne(
     { userId },

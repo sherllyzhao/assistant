@@ -220,7 +220,7 @@ function readRendererConfig() {
   }
 }
 
-function getPackagedRendererUrl() {
+function getConfiguredRendererUrl() {
   const config = readRendererConfig();
 
   return (
@@ -228,6 +228,10 @@ function getPackagedRendererUrl() {
     normalizeRendererUrl(process.env.ELECTRON_RENDERER_URL) ||
     normalizeRendererUrl(config.productionRendererUrl)
   );
+}
+
+function getPreferredRendererUrl() {
+  return getConfiguredRendererUrl() || (app.isPackaged ? "" : DEV_RENDERER_URL);
 }
 
 function createTrayIcon(fill, accentFill) {
@@ -558,29 +562,6 @@ function startTrayFlash() {
   }, 350);
 }
 
-async function canUseRendererUrl(rendererUrl) {
-  if (!rendererUrl) {
-    return false;
-  }
-
-  if (process.env.ELECTRON_RENDERER_URL || process.env.SHERLLY_RENDERER_URL) {
-    return true;
-  }
-
-  if (app.isPackaged && rendererUrl === LOCAL_DEV_RENDERER_URL) {
-    return false;
-  }
-
-  try {
-    const response = await fetch(rendererUrl, {
-      signal: AbortSignal.timeout(800),
-    });
-    return response.ok;
-  } catch {
-    return false;
-  }
-}
-
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1280,
@@ -598,25 +579,60 @@ function createWindow() {
   });
 
   const distIndex = path.join(__dirname, "..", "dist", "index.html");
-  const preferredRendererUrl = app.isPackaged ? getPackagedRendererUrl() : DEV_RENDERER_URL;
-
-  canUseRendererUrl(preferredRendererUrl).then((useRendererUrl) => {
+  const preferredRendererUrl = getPreferredRendererUrl();
+  const loadFallbackRenderer = () => {
     if (!mainWindow) {
       return;
     }
 
-    if (useRendererUrl) {
-      mainWindow.loadURL(preferredRendererUrl);
-      return;
-    }
-
     if (fs.existsSync(distIndex)) {
-      mainWindow.loadFile(distIndex);
+      mainWindow.loadFile(distIndex).catch((error) => {
+        console.error("Failed to load bundled Sherlly renderer:", error);
+        mainWindow?.loadURL(DEV_RENDERER_URL).catch((fallbackError) => {
+          console.error("Failed to load Sherlly dev renderer:", fallbackError);
+        });
+      });
       return;
     }
 
-    mainWindow.loadURL(DEV_RENDERER_URL);
-  });
+    if (preferredRendererUrl === DEV_RENDERER_URL) {
+      return;
+    }
+
+    mainWindow?.loadURL(DEV_RENDERER_URL).catch((error) => {
+      console.error("Failed to load Sherlly dev renderer:", error);
+    });
+  };
+
+  if (preferredRendererUrl) {
+    let fallbackStarted = false;
+    const cleanupRendererLoadListeners = () => {
+      mainWindow?.webContents.removeListener("did-fail-load", handleRendererLoadFailure);
+      mainWindow?.webContents.removeListener("did-fail-provisional-load", handleRendererLoadFailure);
+      mainWindow?.webContents.removeListener("did-finish-load", cleanupRendererLoadListeners);
+    };
+    const handleRendererLoadFailure = (_event, errorCode, errorDescription, validatedUrl, isMainFrame) => {
+      if (fallbackStarted || isMainFrame === false || errorCode === -3) {
+        return;
+      }
+
+      fallbackStarted = true;
+      cleanupRendererLoadListeners();
+      console.error(
+        `Failed to load Sherlly renderer ${validatedUrl || preferredRendererUrl}: ${errorDescription || errorCode}`,
+      );
+      loadFallbackRenderer();
+    };
+
+    mainWindow.webContents.once("did-fail-load", handleRendererLoadFailure);
+    mainWindow.webContents.once("did-fail-provisional-load", handleRendererLoadFailure);
+    mainWindow.webContents.once("did-finish-load", cleanupRendererLoadListeners);
+    mainWindow.loadURL(preferredRendererUrl).catch((error) => {
+      handleRendererLoadFailure(null, 0, error.message, preferredRendererUrl, true);
+    });
+  } else {
+    loadFallbackRenderer();
+  }
 
   mainWindow.on("closed", () => {
     mainWindow = null;

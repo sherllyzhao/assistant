@@ -25,6 +25,57 @@ function normalizeData(data) {
   };
 }
 
+function hasOwnField(data, field) {
+  return Boolean(data && Object.prototype.hasOwnProperty.call(data, field));
+}
+
+function normalizeDataForSave(data, currentData = defaultData) {
+  const current = normalizeData(currentData);
+
+  return {
+    tasks: hasOwnField(data, "tasks") ? (Array.isArray(data.tasks) ? data.tasks : []) : current.tasks,
+    candidates: hasOwnField(data, "candidates")
+      ? (Array.isArray(data.candidates) ? data.candidates : [])
+      : current.candidates,
+    logs: hasOwnField(data, "logs") ? (Array.isArray(data.logs) ? data.logs : []) : current.logs,
+    vaultItems: hasOwnField(data, "vaultItems")
+      ? (Array.isArray(data.vaultItems) ? data.vaultItems : [])
+      : current.vaultItems,
+    settings: {
+      ...current.settings,
+      ...(hasOwnField(data, "settings") && data.settings && typeof data.settings === "object" ? data.settings : {}),
+    },
+  };
+}
+
+function hasMeaningfulData(data) {
+  const normalized = normalizeData(data);
+  return (
+    normalized.tasks.length > 0 ||
+    normalized.candidates.length > 0 ||
+    normalized.logs.length > 0 ||
+    normalized.vaultItems.length > 0
+  );
+}
+
+function isSameData(left, right) {
+  return JSON.stringify(normalizeData(left)) === JSON.stringify(normalizeData(right));
+}
+
+function shouldBackupBeforeSave(currentData, nextData) {
+  const current = normalizeData(currentData);
+  const next = normalizeData(nextData);
+
+  return (
+    hasMeaningfulData(current) &&
+    !isSameData(current, next) &&
+    (next.tasks.length < current.tasks.length ||
+      next.candidates.length < current.candidates.length ||
+      next.logs.length < current.logs.length ||
+      next.vaultItems.length < current.vaultItems.length)
+  );
+}
+
 function normalizeUserId(value, defaultUserId) {
   const fallback = defaultUserId || "default";
 
@@ -276,6 +327,10 @@ function getStorageKey(userId) {
   return `appData:${userId}`;
 }
 
+function getBackupStorageKey(userId, timestamp) {
+  return `backups:appData:${userId}:${timestamp}`;
+}
+
 function getUserKey(username) {
   return `users:${username}`;
 }
@@ -304,14 +359,34 @@ async function loadData(env, userId) {
 }
 
 async function saveData(env, userId, data) {
-  const normalized = normalizeData(data);
+  const storageKey = getStorageKey(userId);
+  const stored = await env.SHERLLY_DATA.get(storageKey);
+  const currentDocument = stored ? JSON.parse(stored) : null;
+  const currentData = currentDocument?.data || defaultData;
+  const normalized = normalizeDataForSave(data, currentData);
+  const now = new Date().toISOString();
+
+  if (shouldBackupBeforeSave(currentData, normalized)) {
+    await env.SHERLLY_DATA.put(
+      getBackupStorageKey(userId, now),
+      JSON.stringify({
+        userId,
+        data: normalizeData(currentData),
+        backedUpAt: now,
+        reason: "before-destructive-save",
+      }),
+      {
+        expirationTtl: 60 * 60 * 24 * 30,
+      },
+    );
+  }
 
   await env.SHERLLY_DATA.put(
-    getStorageKey(userId),
+    storageKey,
     JSON.stringify({
       userId,
       data: normalized,
-      updatedAt: new Date().toISOString(),
+      updatedAt: now,
     }),
   );
 
