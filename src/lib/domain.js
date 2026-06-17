@@ -1427,6 +1427,18 @@ function endOfLocalDay(value) {
   return date;
 }
 
+function isWithinLocalDay(value, day) {
+  const time = getFiniteTime(value);
+
+  if (!Number.isFinite(time)) {
+    return false;
+  }
+
+  const start = startOfLocalDay(day).getTime();
+  const end = endOfLocalDay(day).getTime();
+  return time >= start && time <= end;
+}
+
 function endOfLocalWeek(value) {
   const end = addLocalDays(getLocalWeekStart(value), 7);
   end.setMilliseconds(end.getMilliseconds() - 1);
@@ -1463,6 +1475,26 @@ function sortAssistantTasksByFocus(left, right) {
 function getAssistantQuestionIntent(query, keywords) {
   const question = String(query || "").trim();
 
+  if (!question) {
+    return "overview";
+  }
+
+  if (/帮助|怎么用|能做什么|你会什么|使用说明|help/i.test(question)) {
+    return "help";
+  }
+
+  if (/日报|周报|月报|总结|复盘|最近做了|今天做了|本周做了|完成了|已完成|做完/.test(question)) {
+    return "report";
+  }
+
+  if (/逾期|过期|风险|来不及|最急|紧急|催办|提醒|危险/.test(question)) {
+    return "risk";
+  }
+
+  if (/明天|明日|明儿/.test(question)) {
+    return "tomorrow";
+  }
+
   if (/等待|他人|对方|回复|反馈/.test(question)) {
     return "waiting";
   }
@@ -1471,8 +1503,16 @@ function getAssistantQuestionIntent(query, keywords) {
     return "stale";
   }
 
+  if (/截止|到期|时间|什么时候|哪天|排期|日程|安排/.test(question)) {
+    return "schedule";
+  }
+
   if (/(本周|这周|周|星期)/.test(question) && /(重要|重点|优先|安排|事情|事项|任务)/.test(question)) {
     return "week";
+  }
+
+  if (/先做|现在.*(?:做|干)|该.*(?:做|干)|接下来|优先|最重要|重点|重要/.test(question)) {
+    return "focus";
   }
 
   if (/(今天|今日|还剩|还有|没完成|未完成|待办)/.test(question)) {
@@ -1490,7 +1530,7 @@ function extractAssistantKeywords(query) {
   const cleaned = String(query || "")
     .toLowerCase()
     .replace(
-      /(sherlly|ai|工作台|今天|今日|明天|本周|这周|本月|这个月|还有|还剩|什么|哪些|哪个|怎么|怎样|如何|进展|重点|重要|事情|事项|任务|待办|未完成|没完成|完成|情况|一下|帮我|看看|查看|最|的|了|吗|呢|吧|有|是|和|与|及|回复|反馈|跟进)/g,
+      /(sherlly|ai|工作台|有没有|有无|是否|没有|今天|今日|明天|明日|本周|这周|本月|这个月|还有|还剩|什么|哪些|哪个|怎么|怎样|如何|进展|重点|重要|事情|事项|任务|待办|未完成|没完成|完成|情况|一下|帮我|看看|查看|分析|统计|列表|列出|给我|告诉我|最|的|了|吗|呢|吧|有|是|和|与|及|回复|反馈|跟进)/g,
       " ",
     )
     .replace(/[^\u4e00-\u9fa5a-z0-9]+/gi, " ");
@@ -1517,6 +1557,53 @@ function getLogSearchText(log) {
 function matchesAssistantKeywords(value, keywords) {
   const text = String(value || "").toLowerCase();
   return keywords.some((keyword) => text.includes(keyword));
+}
+
+function addAssistantKeyword(candidates, keyword) {
+  const cleanKeyword = String(keyword || "").trim().toLowerCase();
+
+  if (cleanKeyword.length >= 2 && !candidates.includes(cleanKeyword)) {
+    candidates.push(cleanKeyword);
+  }
+}
+
+function addAssistantNgrams(candidates, value) {
+  const cleanValue = String(value || "")
+    .toLowerCase()
+    .replace(/[【】"'“”‘’、，,。.!！?？:：;；()[\]（）<>《》\s]/g, "");
+
+  if (cleanValue.length < 2) {
+    return;
+  }
+
+  addAssistantKeyword(candidates, cleanValue);
+
+  for (let size = 2; size <= Math.min(cleanValue.length, 4); size += 1) {
+    for (let index = 0; index <= cleanValue.length - size; index += 1) {
+      addAssistantKeyword(candidates, cleanValue.slice(index, index + size));
+    }
+  }
+}
+
+function getAssistantQueryTerms(query, tasks) {
+  const question = String(query || "").toLowerCase();
+  const terms = [...extractAssistantKeywords(question)];
+
+  for (const task of Array.isArray(tasks) ? tasks : []) {
+    addAssistantKeyword(terms, task?.owner);
+
+    for (const tag of Array.isArray(task?.tags) ? task.tags : []) {
+      addAssistantKeyword(terms, tag);
+    }
+
+    addAssistantNgrams(terms, task?.title);
+
+    for (const token of tokenizeTaskTitle(task?.title || "")) {
+      addAssistantKeyword(terms, token);
+    }
+  }
+
+  return terms.filter((term) => question.includes(term)).slice(0, 8);
 }
 
 function isTaskDueBefore(task, endTime) {
@@ -1624,6 +1711,12 @@ function createAssistantLogScope(logs, range, now) {
   return filterLogsByRange(Array.isArray(logs) ? logs : [], range, now).slice().reverse().slice(0, 8);
 }
 
+function sortAssistantLogsNewestFirst(left, right) {
+  const leftTime = getFiniteTime(left?.createdAt);
+  const rightTime = getFiniteTime(right?.createdAt);
+  return (Number.isFinite(rightTime) ? rightTime : 0) - (Number.isFinite(leftTime) ? leftTime : 0);
+}
+
 export function createAiWorkspaceAnswer(tasks, logs, query = "", now = new Date()) {
   const normalizedTasks = Array.isArray(tasks) ? tasks : [];
   const normalizedLogs = Array.isArray(logs) ? logs : [];
@@ -1631,9 +1724,11 @@ export function createAiWorkspaceAnswer(tasks, logs, query = "", now = new Date(
   const completedTasks = normalizedTasks.filter((task) => task?.status === "done");
   const overdueTasks = activeTasks.filter((task) => isOverdue(task, now));
   const waitingTasks = activeTasks.filter((task) => task.status === "waiting");
-  const keywords = extractAssistantKeywords(query);
+  const cleanQuery = String(query || "").trim();
+  const keywords = getAssistantQueryTerms(cleanQuery, normalizedTasks);
   const intent = getAssistantQuestionIntent(query, keywords);
   const todayEndTime = endOfLocalDay(now).getTime();
+  const tomorrow = addLocalDays(now, 1);
   const weekEndTime = endOfLocalWeek(now).getTime();
   const projectGroups = createAssistantProjectGroups(activeTasks, now);
   const memoryHints = createAssistantMemoryHints(normalizedTasks);
@@ -1643,6 +1738,162 @@ export function createAiWorkspaceAnswer(tasks, logs, query = "", now = new Date(
     overdue: overdueTasks.length,
     waiting: waitingTasks.length,
   };
+  const baseTips = [
+    "可以直接问：现在先做什么、有哪些风险、某个客户进展如何、明天要做什么。",
+    "安全速记内容不会参与 AI 工作台分析，避免把密码类信息混进普通工作流。",
+  ];
+
+  if (intent === "help") {
+    return {
+      intent,
+      label: "使用帮助",
+      title: "你可以直接用工作语言问我",
+      summary: "我会根据任务标题、负责人、标签、备注和日志做本地分析。可以问优先级、风险、截止安排、项目进展、日报周报和长期未推进事项。",
+      taskSectionTitle: "当前建议关注",
+      metrics: baseMetrics,
+      primaryTasks: activeTasks.slice().sort(sortAssistantTasksByFocus).slice(0, 8),
+      projectGroups,
+      memoryHints,
+      recentLogs: createAssistantLogScope(normalizedLogs, "week", now),
+      keywords,
+      tips: baseTips,
+      usedQuery: cleanQuery,
+      generatedAt: now.toISOString(),
+    };
+  }
+
+  if (intent === "risk") {
+    const dueSoonTasks = activeTasks.filter((task) => isTaskDueBefore(task, todayEndTime) || task.priority === "high");
+    const primaryTasks = [...overdueTasks, ...dueSoonTasks, ...waitingTasks]
+      .filter((task, index, list) => list.findIndex((item) => item.id === task.id) === index)
+      .sort(sortAssistantTasksByFocus)
+      .slice(0, 8);
+
+    return {
+      intent,
+      label: "风险扫描",
+      title: "需要马上留意的风险",
+      summary: `风险主要来自 ${overdueTasks.length} 件逾期、${waitingTasks.length} 件等待他人，以及 ${dueSoonTasks.length} 件高优先级或今日到期任务。`,
+      taskSectionTitle: "风险任务",
+      metrics: {
+        ...baseMetrics,
+        risky: primaryTasks.length,
+      },
+      primaryTasks,
+      projectGroups,
+      memoryHints,
+      recentLogs: createAssistantLogScope(normalizedLogs, "today", now),
+      keywords,
+      tips: baseTips,
+      usedQuery: cleanQuery,
+      generatedAt: now.toISOString(),
+    };
+  }
+
+  if (intent === "focus") {
+    const primaryTasks = activeTasks
+      .filter((task) => task.priority === "high" || isOverdue(task, now) || isTaskDueBefore(task, todayEndTime) || task.status === "doing")
+      .sort(sortAssistantTasksByFocus)
+      .slice(0, 8);
+
+    return {
+      intent,
+      label: "优先级建议",
+      title: "现在建议先处理这些",
+      summary: `我按逾期、优先级、截止时间和进行中状态排序。当前最值得先看的有 ${primaryTasks.length || activeTasks.length} 件。`,
+      taskSectionTitle: "优先处理",
+      metrics: baseMetrics,
+      primaryTasks: primaryTasks.length > 0 ? primaryTasks : activeTasks.slice().sort(sortAssistantTasksByFocus).slice(0, 8),
+      projectGroups,
+      memoryHints,
+      recentLogs: createAssistantLogScope(normalizedLogs, "today", now),
+      keywords,
+      tips: baseTips,
+      usedQuery: cleanQuery,
+      generatedAt: now.toISOString(),
+    };
+  }
+
+  if (intent === "tomorrow") {
+    const primaryTasks = activeTasks
+      .filter((task) => isWithinLocalDay(task.dueAt, tomorrow) || (!task.dueAt && task.priority === "high"))
+      .sort(sortAssistantTasksByFocus)
+      .slice(0, 8);
+
+    return {
+      intent,
+      label: "明日安排",
+      title: "明天要盯住的事",
+      summary: `明天截止或适合提前安排的任务有 ${primaryTasks.length} 件；如果为空，说明当前任务里没有明确的明日截止时间。`,
+      taskSectionTitle: "明日任务",
+      metrics: baseMetrics,
+      primaryTasks,
+      projectGroups,
+      memoryHints,
+      recentLogs: createAssistantLogScope(normalizedLogs, "week", now),
+      keywords,
+      tips: baseTips,
+      usedQuery: cleanQuery,
+      generatedAt: now.toISOString(),
+    };
+  }
+
+  if (intent === "schedule") {
+    const primaryTasks = activeTasks
+      .filter((task) => task.dueAt || task.reminderStartAt || task.reminderEndAt)
+      .sort(sortAssistantTasksByFocus)
+      .slice(0, 10);
+
+    return {
+      intent,
+      label: "截止安排",
+      title: "有明确时间的任务",
+      summary: `当前有 ${primaryTasks.length} 件任务带截止或提醒时间；按优先级和最近截止排序。`,
+      taskSectionTitle: "时间线",
+      metrics: baseMetrics,
+      primaryTasks,
+      projectGroups,
+      memoryHints,
+      recentLogs: createAssistantLogScope(normalizedLogs, "week", now),
+      keywords,
+      tips: baseTips,
+      usedQuery: cleanQuery,
+      generatedAt: now.toISOString(),
+    };
+  }
+
+  if (intent === "report") {
+    const range = /周报|本周|这周/.test(cleanQuery) ? "week" : /月报|本月|这个月/.test(cleanQuery) ? "month" : "today";
+    const report = createDailyReport(normalizedTasks, normalizedLogs, range, now);
+    const primaryTasks = [
+      ...report.sections.completedTasks,
+      ...report.sections.overdueTasks,
+      ...report.sections.waitingTasks,
+      ...report.sections.tomorrowFocus,
+    ]
+      .filter((task, index, list) => task?.id && list.findIndex((item) => item.id === task.id) === index)
+      .slice(0, 8);
+
+    return {
+      intent,
+      label: range === "week" ? "自动周报" : range === "month" ? "月度复盘" : "自动日报",
+      title: range === "week" ? "本周工作摘要" : range === "month" ? "本月工作摘要" : "今日工作摘要",
+      summary: `创建 ${report.metrics.created} 件，执行 ${report.metrics.started} 次，完成 ${report.metrics.completed} 件，当前未完成 ${report.metrics.active} 件，逾期 ${report.metrics.overdue} 件。`,
+      taskSectionTitle: "摘要相关任务",
+      metrics: {
+        ...baseMetrics,
+        logs: report.metrics.logs,
+      },
+      primaryTasks,
+      projectGroups,
+      memoryHints,
+      recentLogs: report.sections.recentLogs,
+      keywords,
+      tips: baseTips,
+      usedQuery: cleanQuery,
+      generatedAt: now.toISOString(),
+    };
+  }
 
   if (intent === "today") {
     const scopedTasks = activeTasks.filter((task) => {
@@ -1663,6 +1914,8 @@ export function createAiWorkspaceAnswer(tasks, logs, query = "", now = new Date(
       memoryHints,
       recentLogs: createAssistantLogScope(normalizedLogs, "today", now),
       keywords,
+      tips: baseTips,
+      usedQuery: cleanQuery,
       generatedAt: now.toISOString(),
     };
   }
@@ -1686,6 +1939,8 @@ export function createAiWorkspaceAnswer(tasks, logs, query = "", now = new Date(
       memoryHints,
       recentLogs: createAssistantLogScope(normalizedLogs, "week", now),
       keywords,
+      tips: baseTips,
+      usedQuery: cleanQuery,
       generatedAt: now.toISOString(),
     };
   }
@@ -1705,6 +1960,8 @@ export function createAiWorkspaceAnswer(tasks, logs, query = "", now = new Date(
       memoryHints,
       recentLogs: createAssistantLogScope(normalizedLogs, "week", now),
       keywords,
+      tips: baseTips,
+      usedQuery: cleanQuery,
       generatedAt: now.toISOString(),
     };
   }
@@ -1729,6 +1986,8 @@ export function createAiWorkspaceAnswer(tasks, logs, query = "", now = new Date(
       memoryHints,
       recentLogs: createAssistantLogScope(normalizedLogs, "month", now),
       keywords,
+      tips: baseTips,
+      usedQuery: cleanQuery,
       generatedAt: now.toISOString(),
     };
   }
@@ -1745,22 +2004,34 @@ export function createAiWorkspaceAnswer(tasks, logs, query = "", now = new Date(
       .slice(0, 8);
     const activeMatchedTasks = matchedTasks.filter((task) => isActiveTask(task));
     const completedMatchedTasks = matchedTasks.filter((task) => task.status === "done");
+    const isFallback = cleanQuery && keywords.length === 0;
+    const fallbackTasks = activeTasks.slice().sort(sortAssistantTasksByFocus).slice(0, 8);
 
     return {
       intent,
-      label: "进展查询",
-      title: keywords.length > 0 ? `${keywords.join(" / ")} 的进展` : "相关事项进展",
-      summary: `共找到 ${matchedTasks.length} 件相关任务：未完成 ${activeMatchedTasks.length} 件、已完成 ${completedMatchedTasks.length} 件、最近日志 ${matchedLogs.length} 条。`,
-      taskSectionTitle: "相关任务",
+      label: isFallback ? "未识别明确对象" : "进展查询",
+      title: keywords.length > 0 ? `${keywords.join(" / ")} 的进展` : "我先按当前工作概览回答",
+      summary: isFallback
+        ? `我还没从“${cleanQuery}”里识别到联系人、项目、标签或任务关键词。先给你当前最该关注的未完成事项。`
+        : `共找到 ${matchedTasks.length} 件相关任务：未完成 ${activeMatchedTasks.length} 件、已完成 ${completedMatchedTasks.length} 件、最近日志 ${matchedLogs.length} 条。`,
+      taskSectionTitle: isFallback ? "建议关注" : "相关任务",
       metrics: {
         ...baseMetrics,
         matched: matchedTasks.length,
       },
-      primaryTasks: matchedTasks.slice().sort(sortAssistantTasksByFocus).slice(0, 8),
+      primaryTasks: isFallback ? fallbackTasks : matchedTasks.slice().sort(sortAssistantTasksByFocus).slice(0, 8),
       projectGroups,
       memoryHints,
-      recentLogs: matchedLogs,
+      recentLogs: isFallback ? createAssistantLogScope(normalizedLogs, "week", now) : matchedLogs,
       keywords,
+      tips: isFallback
+        ? [
+            "可以带上任务里的负责人、客户名、标签或标题关键词，例如“王总合同进展”或“报价还有哪些没做”。",
+            ...baseTips,
+          ]
+        : baseTips,
+      usedQuery: cleanQuery,
+      isFallback,
       generatedAt: now.toISOString(),
     };
   }
@@ -1777,6 +2048,8 @@ export function createAiWorkspaceAnswer(tasks, logs, query = "", now = new Date(
     memoryHints,
     recentLogs: createAssistantLogScope(normalizedLogs, "week", now),
     keywords,
+    tips: baseTips,
+    usedQuery: cleanQuery,
     generatedAt: now.toISOString(),
   };
 }

@@ -371,6 +371,7 @@ function App() {
   const [wechatText, setWechatText] = useState("");
   const [activeView, setActiveView] = useState("tasks");
   const [assistantQuestion, setAssistantQuestion] = useState(assistantQuestionPresets[0]);
+  const [assistantDraftQuestion, setAssistantDraftQuestion] = useState(assistantQuestionPresets[0]);
   const [taskFilter, setTaskFilter] = useState("active");
   const [searchQuery, setSearchQuery] = useState("");
   const [logRange, setLogRange] = useState("today");
@@ -924,6 +925,12 @@ function App() {
   function notifyWithFallback(payload) {
     pushReminderAlert(payload);
     sendNotification(payload).catch((error) => console.error(error));
+  }
+
+  function askAssistant(question) {
+    const cleanQuestion = String(question || "").trim() || assistantQuestionPresets[0];
+    setAssistantDraftQuestion(cleanQuestion);
+    setAssistantQuestion(cleanQuestion);
   }
 
   function downloadTaskCalendar(task) {
@@ -2383,9 +2390,11 @@ function App() {
           ) : activeView === "assistant" ? (
             <AiWorkspacePanel
               answer={aiWorkspaceAnswer}
-              onAskPreset={setAssistantQuestion}
+              draftQuestion={assistantDraftQuestion}
+              onAskPreset={askAssistant}
               onPreviewAttachment={previewAttachment}
-              onQuestionChange={setAssistantQuestion}
+              onQuestionChange={setAssistantDraftQuestion}
+              onSubmitQuestion={askAssistant}
               onViewTask={(task) => setDetailTaskId(task.id)}
               question={assistantQuestion}
             />
@@ -3110,7 +3119,16 @@ function VaultItemCard({ item, onCopyValue, onDeleteItem, onEditItem, onLockItem
   );
 }
 
-function AiWorkspacePanel({ answer, onAskPreset, onPreviewAttachment, onQuestionChange, onViewTask, question }) {
+function AiWorkspacePanel({
+  answer,
+  draftQuestion,
+  onAskPreset,
+  onPreviewAttachment,
+  onQuestionChange,
+  onSubmitQuestion,
+  onViewTask,
+  question,
+}) {
   const metrics = [
     answer.metrics?.matched != null ? { label: "相关", value: answer.metrics.matched } : null,
     { label: "未完成", value: answer.metrics?.active || 0 },
@@ -3118,9 +3136,13 @@ function AiWorkspacePanel({ answer, onAskPreset, onPreviewAttachment, onQuestion
     { label: "等待他人", value: answer.metrics?.waiting || 0 },
     { label: "已完成", value: answer.metrics?.completed || 0 },
   ].filter(Boolean);
+  const hasDraftChanges = draftQuestion.trim() !== question.trim();
+  const answerTips = Array.isArray(answer.tips) ? answer.tips : [];
+  const answerKeywords = Array.isArray(answer.keywords) ? answer.keywords : [];
 
   function handleSubmit(event) {
     event.preventDefault();
+    onSubmitQuestion(draftQuestion);
   }
 
   return (
@@ -3137,20 +3159,20 @@ function AiWorkspacePanel({ answer, onAskPreset, onPreviewAttachment, onQuestion
         <MessageSquareText size={18} />
         <input
           aria-label="AI工作台问题"
-          value={question}
+          value={draftQuestion}
           onChange={(event) => onQuestionChange(event.target.value)}
-          placeholder="今天还有什么没完成？"
+          placeholder="直接问：现在先做什么、合同进展如何、有哪些风险"
         />
         <button className="primary-button" type="submit">
           <Search size={16} />
-          分析
+          {hasDraftChanges ? "重新分析" : "分析"}
         </button>
       </form>
 
       <div className="ai-presets" aria-label="常用问题">
         {assistantQuestionPresets.map((preset) => (
           <button
-            className={preset === question ? "is-active" : ""}
+            className={preset === question && !hasDraftChanges ? "is-active" : ""}
             key={preset}
             type="button"
             onClick={() => onAskPreset(preset)}
@@ -3168,7 +3190,22 @@ function AiWorkspacePanel({ answer, onAskPreset, onPreviewAttachment, onQuestion
           </div>
           <em>{formatDateTime(answer.generatedAt)}</em>
         </div>
+        <div className="ai-answer-context" aria-label="AI工作台解析依据">
+          <span>按“{answer.usedQuery || question}”分析</span>
+          {hasDraftChanges ? <span className="is-pending">输入已修改，点重新分析更新结果</span> : null}
+          {answerKeywords.map((keyword) => (
+            <span key={keyword}>识别：{keyword}</span>
+          ))}
+          {answer.isFallback ? <span className="is-warning">未识别明确对象</span> : null}
+        </div>
         <p>{answer.summary}</p>
+        {answerTips.length > 0 ? (
+          <div className="ai-answer-tips">
+            {answerTips.map((tip) => (
+              <span key={tip}>{tip}</span>
+            ))}
+          </div>
+        ) : null}
         <div className="report-metrics">
           {metrics.map((metric) => (
             <span key={metric.label}>

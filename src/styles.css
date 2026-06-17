@@ -1602,6 +1602,48 @@ textarea:focus {
   line-height: 1.65;
 }
 
+.ai-answer-context,
+.ai-answer-tips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.ai-answer-context span,
+.ai-answer-tips span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 0 8px;
+  color: var(--muted);
+  background: var(--surface-muted);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.4;
+}
+
+.ai-answer-context .is-pending {
+  color: #7a520f;
+  background: #fff2cf;
+  border-color: rgba(155, 106, 18, 0.26);
+}
+
+.ai-answer-context .is-warning {
+  color: var(--danger);
+  background: var(--danger-soft);
+  border-color: rgba(201, 71, 56, 0.24);
+}
+
+.ai-answer-tips span {
+  align-items: flex-start;
+  min-height: 0;
+  padding: 6px 8px;
+  border-radius: 8px;
+  white-space: normal;
+}
+
 .ai-workspace-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
