@@ -2942,8 +2942,22 @@ function VaultItemCard({ item, onCopyValue, onDeleteItem, onEditItem, onLockItem
   );
 }
 
-function AuthScreen({ draft, error, isSubmitting, mode, onModeChange, onSubmit, onUpdate }) {
+function AuthScreen({
+  draft,
+  error,
+  isSubmitting,
+  mode,
+  onModeChange,
+  onSubmit,
+  onTurnstileChange,
+  onTurnstileError,
+  onUpdate,
+  turnstileResetKey,
+  turnstileSiteKey,
+  turnstileToken,
+}) {
   const isRegister = mode === "register";
+  const requiresTurnstile = Boolean(turnstileSiteKey);
 
   return (
     <main className="auth-shell">
@@ -3014,13 +3028,84 @@ function AuthScreen({ draft, error, isSubmitting, mode, onModeChange, onSubmit, 
             </p>
           ) : null}
 
-          <button className="primary-button full-width" type="submit" disabled={isSubmitting}>
+          {requiresTurnstile ? (
+            <TurnstileChallenge
+              disabled={isSubmitting}
+              onError={onTurnstileError}
+              onTokenChange={onTurnstileChange}
+              resetKey={turnstileResetKey}
+              siteKey={turnstileSiteKey}
+            />
+          ) : null}
+
+          <button className="primary-button full-width" type="submit" disabled={isSubmitting || (requiresTurnstile && !turnstileToken)}>
             <LogIn size={18} />
             {isSubmitting ? "处理中" : isRegister ? "注册并登录" : "登录"}
           </button>
         </form>
       </section>
     </main>
+  );
+}
+
+function TurnstileChallenge({ disabled, onError, onTokenChange, resetKey, siteKey }) {
+  const containerRef = useRef(null);
+  const widgetIdRef = useRef("");
+
+  useEffect(() => {
+    let isCancelled = false;
+    let retryTimer = 0;
+
+    function clearWidget() {
+      if (widgetIdRef.current && window.turnstile?.remove) {
+        window.turnstile.remove(widgetIdRef.current);
+      }
+
+      widgetIdRef.current = "";
+    }
+
+    function renderWidget() {
+      if (isCancelled || !containerRef.current) {
+        return;
+      }
+
+      if (!window.turnstile?.render) {
+        retryTimer = window.setTimeout(renderWidget, 160);
+        return;
+      }
+
+      clearWidget();
+      widgetIdRef.current = window.turnstile.render(containerRef.current, {
+        sitekey: siteKey,
+        action: "login",
+        callback(token) {
+          onTokenChange(token);
+        },
+        "expired-callback"() {
+          onTokenChange("");
+          onError("人类验证已过期，请重新验证");
+        },
+        "error-callback"() {
+          onTokenChange("");
+          onError("人类验证加载失败，请稍后重试");
+        },
+      });
+    }
+
+    onTokenChange("");
+    renderWidget();
+
+    return () => {
+      isCancelled = true;
+      window.clearTimeout(retryTimer);
+      clearWidget();
+    };
+  }, [onError, onTokenChange, resetKey, siteKey]);
+
+  return (
+    <div className="turnstile-field" aria-busy={disabled ? "true" : "false"}>
+      <div ref={containerRef} />
+    </div>
   );
 }
 
