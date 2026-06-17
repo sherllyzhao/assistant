@@ -4,6 +4,7 @@ const migrationStoragePrefix = "sherlly-assistant:v1:migrated";
 const authStorageKey = "sherlly-assistant:auth:v1";
 const cloudApiBaseUrl = String(import.meta.env.VITE_SHERLLY_API_URL || "").replace(/\/+$/, "");
 const cloudApiToken = String(import.meta.env.VITE_SHERLLY_API_TOKEN || "").trim();
+const turnstileSiteKey = String(import.meta.env.VITE_TURNSTILE_SITE_KEY || "").trim();
 
 export const initialData = {
   tasks: [],
@@ -88,6 +89,10 @@ function normalizeAuthPayload(payload) {
 
 export function isCloudSyncEnabled() {
   return Boolean(cloudApiBaseUrl);
+}
+
+export function getTurnstileSiteKey() {
+  return turnstileSiteKey;
 }
 
 export function getStoredAuth() {
@@ -311,6 +316,7 @@ export async function loginAccount(credentials) {
     body: JSON.stringify({
       username: credentials?.username,
       password: credentials?.password,
+      turnstileToken: credentials?.turnstileToken,
     }),
     fallbackMessage: "登录失败",
   });
@@ -327,6 +333,7 @@ export async function registerAccount(credentials) {
       username: credentials?.username,
       password: credentials?.password,
       displayName: credentials?.displayName,
+      turnstileToken: credentials?.turnstileToken,
     }),
     fallbackMessage: "注册失败",
   });

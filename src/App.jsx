@@ -88,6 +88,7 @@ import {
   getAttachmentPreview,
   getStoredAccount,
   isAuthRequiredError,
+  getTurnstileSiteKey,
   loginAccount,
   logoutAccount,
   openAttachment,
@@ -125,6 +126,7 @@ const viewOptions = [
 ];
 
 const cloudSyncEnabled = Boolean(import.meta.env.VITE_SHERLLY_API_URL);
+const turnstileSiteKey = getTurnstileSiteKey();
 const REMINDER_ALERT_AUTO_DISMISS_MS = 5000;
 const CLOCK_TICK_MS = 60 * 1000;
 const VAULT_UNLOCK_TTL_MS = 2 * 60 * 1000;
@@ -303,6 +305,8 @@ function App() {
   const [authMode, setAuthMode] = useState("login");
   const [authDraft, setAuthDraft] = useState({ username: "", password: "", displayName: "" });
   const [authError, setAuthError] = useState("");
+  const [turnstileToken, setTurnstileToken] = useState("");
+  const [turnstileResetKey, setTurnstileResetKey] = useState(0);
   const [isAuthenticating, setIsAuthenticating] = useState(false);
   const [syncError, setSyncError] = useState("");
   const [passwordDraft, setPasswordDraft] = useState({ currentPassword: "", nextPassword: "", confirmPassword: "" });
@@ -1936,27 +1940,45 @@ function App() {
     setAuthDraft((current) => ({ ...current, [field]: value }));
   }
 
+  function resetTurnstileToken() {
+    setTurnstileToken("");
+    setTurnstileResetKey((current) => current + 1);
+  }
+
   function switchAuthMode(nextMode) {
     setAuthMode(nextMode);
     setAuthError("");
+    resetTurnstileToken();
   }
 
   async function submitAuth(event) {
     event.preventDefault();
     setAuthError("");
+
+    if (turnstileSiteKey && !turnstileToken) {
+      setAuthError("请先完成人类验证");
+      return;
+    }
+
     setIsAuthenticating(true);
 
     try {
+      const credentials = {
+        ...authDraft,
+        turnstileToken,
+      };
       const auth =
-        authMode === "register" ? await registerAccount(authDraft) : await loginAccount(authDraft);
+        authMode === "register" ? await registerAccount(credentials) : await loginAccount(credentials);
 
       setAccount(auth.user);
       setAuthDraft({ username: authDraft.username, password: "", displayName: authDraft.displayName });
+      resetTurnstileToken();
       setData(initialData);
       setIsLoaded(false);
     } catch (error) {
       console.error(error);
       setAuthError(error.message || "登录失败，请稍后重试");
+      resetTurnstileToken();
     } finally {
       setIsAuthenticating(false);
     }
@@ -2030,7 +2052,15 @@ function App() {
         mode={authMode}
         onModeChange={switchAuthMode}
         onSubmit={submitAuth}
+        onTurnstileChange={setTurnstileToken}
+        onTurnstileError={(message) => {
+          setTurnstileToken("");
+          setAuthError(message);
+        }}
         onUpdate={updateAuthDraft}
+        turnstileResetKey={turnstileResetKey}
+        turnstileSiteKey={turnstileSiteKey}
+        turnstileToken={turnstileToken}
       />
     );
   }

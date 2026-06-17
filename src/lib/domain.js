@@ -23,6 +23,7 @@ export const vaultCategories = [
   { value: "client", label: "客户系统" },
   { value: "software", label: "软件授权" },
   { value: "network", label: "网络/VPN" },
+  { value: "ftp", label: "FTP/SFTP" },
   { value: "api", label: "API/Token" },
   { value: "other", label: "其他" },
 ];
