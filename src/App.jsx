@@ -122,7 +122,6 @@ const viewOptions = [
   { value: "tasks", label: "任务看板", description: "录入、筛选和推进待办" },
   { value: "vault", label: "安全速记", description: "保存账号、密码和密钥" },
   { value: "report", label: "工作日报", description: "查看日报概览与日志明细" },
-  { value: "profile", label: "个人信息", description: "查看账号并修改密码" },
 ];
 
 const cloudSyncEnabled = Boolean(import.meta.env.VITE_SHERLLY_API_URL);
