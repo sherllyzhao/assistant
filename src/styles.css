@@ -1496,6 +1496,13 @@ textarea:focus {
   border: 1px solid rgba(201, 71, 56, 0.24);
 }
 
+.vault-message {
+  position: sticky;
+  top: 10px;
+  z-index: 30;
+  box-shadow: 0 10px 24px rgba(25, 45, 38, 0.1);
+}
+
 .ai-workspace-toolbar svg,
 .report-toolbar svg {
   color: var(--accent);

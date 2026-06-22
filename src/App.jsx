@@ -2899,7 +2899,11 @@ function VaultPanel({
         <p className="profile-message is-error">当前环境不支持 Web Crypto，暂时不能使用安全速记。</p>
       ) : null}
 
-      {status.message ? <p className={`profile-message is-${status.type || "success"}`}>{status.message}</p> : null}
+      {status.message ? (
+        <p className={`profile-message vault-message is-${status.type || "success"}`} role="alert" aria-live="polite">
+          {status.message}
+        </p>
+      ) : null}
 
       <div className="vault-grid">
         <section className="vault-card">
