@@ -45,6 +45,7 @@ import {
   createAttachment,
   createTaskOrganizingSuggestions,
   createVaultPlaintext,
+  createWorkMemoryLibrary,
   DEFAULT_FTP_CLIENT_PATH,
   emptyTaskDraft,
   emptyVaultDraft,
@@ -126,6 +127,7 @@ const ownerOptions = [
 const viewOptions = [
   { value: "tasks", label: "任务看板", description: "录入、筛选和推进待办" },
   { value: "assistant", label: "AI工作台", description: "询问今日、本周和项目进展" },
+  { value: "memory", label: "长期记忆", description: "沉淀联系人、项目和排期习惯" },
   { value: "vault", label: "安全速记", description: "保存账号、密码和密钥" },
   { value: "report", label: "工作日报", description: "查看日报概览与日志明细" },
 ];
@@ -387,6 +389,7 @@ function App() {
   const [mobileCaptureStatus, setMobileCaptureStatus] = useState("");
   const [isVoiceListening, setIsVoiceListening] = useState(false);
   const [currentTime, setCurrentTime] = useState(() => new Date());
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const saveTimerRef = useRef(0);
   const titleInputRef = useRef(null);
   const reminderAlertTimersRef = useRef(new Map());
@@ -824,6 +827,10 @@ function App() {
     () => createAiWorkspaceAnswer(data.tasks, data.logs, assistantQuestion, currentTime),
     [assistantQuestion, currentTime, data.logs, data.tasks],
   );
+  const workMemoryLibrary = useMemo(
+    () => createWorkMemoryLibrary(data.tasks, currentTime),
+    [currentTime, data.tasks],
+  );
   const organizingSuggestions = useMemo(
     () => createTaskOrganizingSuggestions(data.tasks, currentTime),
     [currentTime, data.tasks],
@@ -925,6 +932,33 @@ function App() {
   function notifyWithFallback(payload) {
     pushReminderAlert(payload);
     sendNotification(payload).catch((error) => console.error(error));
+  }
+
+  async function handleRefresh() {
+    setIsRefreshing(true);
+    try {
+      const loadedData = await loadAppData();
+      setData(loadedData);
+      setAuthError("");
+      setSyncError("");
+      notifyWithFallback({
+        title: "已刷新",
+        body: "任务数据已更新",
+        sound: false,
+        flash: false,
+      });
+    } catch (error) {
+      console.error(error);
+      if (isAuthRequiredError(error)) {
+        setAccount(null);
+        setAuthError(error.message || "请重新登录 Sherlly 账号");
+        setSyncError("");
+        return;
+      }
+      setSyncError(error.message || "刷新失败，请检查网络");
+    } finally {
+      setIsRefreshing(false);
+    }
   }
 
   function askAssistant(question) {
@@ -2283,7 +2317,7 @@ function App() {
         ))}
       </section>
 
-      <div className={`workspace-grid ${["profile", "vault"].includes(activeView) ? "profile-grid" : ""}`}>
+      <div className={`workspace-grid ${["profile", "vault", "memory"].includes(activeView) ? "profile-grid" : ""}`}>
         <section
           className="task-area"
           aria-label={
@@ -2295,7 +2329,9 @@ function App() {
                   ? "安全速记"
                   : activeView === "assistant"
                     ? "AI工作台"
-                    : "工作日报"
+                    : activeView === "memory"
+                      ? "长期记忆"
+                      : "工作日报"
           }
         >
           {activeView === "tasks" ? (
@@ -2313,6 +2349,15 @@ function App() {
                     value={searchQuery}
                     onChange={(event) => setSearchQuery(event.target.value)}
                   />
+                  <button
+                    className="icon-button"
+                    type="button"
+                    onClick={handleRefresh}
+                    disabled={isRefreshing}
+                    title="刷新任务数据"
+                  >
+                    <RefreshCw size={16} style={{ animation: isRefreshing ? "spin 1s linear infinite" : "none" }} />
+                  </button>
                 </div>
               </div>
 
@@ -2398,6 +2443,11 @@ function App() {
               onViewTask={(task) => setDetailTaskId(task.id)}
               question={assistantQuestion}
             />
+          ) : activeView === "memory" ? (
+            <WorkMemoryPanel
+              memory={workMemoryLibrary}
+              onViewTask={(task) => setDetailTaskId(task.id)}
+            />
           ) : (
             <ReportPanel
               dailyReport={dailyReport}
@@ -2414,7 +2464,7 @@ function App() {
           )}
         </section>
 
-        {["profile", "vault"].includes(activeView) ? null : (
+        {["profile", "vault", "memory"].includes(activeView) ? null : (
         <aside className="side-rail" aria-label="录入与候选任务">
           <section className="panel">
             <div className="panel-heading">
@@ -3123,6 +3173,132 @@ function VaultItemCard({ item, onCopyValue, onDeleteItem, onEditItem, onLockItem
   );
 }
 
+function WorkMemoryPanel({ memory, onViewTask }) {
+  const metrics = [
+    { label: "任务样本", value: memory.metrics?.taskSamples || 0 },
+    { label: "联系人", value: memory.metrics?.contacts || 0 },
+    { label: "排期规律", value: memory.metrics?.schedulePatterns || 0 },
+    { label: "项目", value: memory.metrics?.projects || 0 },
+  ];
+
+  return (
+    <div className="memory-panel">
+      <div className="section-toolbar memory-toolbar">
+        <div>
+          <p className="eyebrow">Long Memory</p>
+          <h2>长期记忆</h2>
+        </div>
+        <Wand2 size={20} />
+      </div>
+
+      <section className="ai-answer-card memory-summary">
+        <div className="ai-answer-heading">
+          <div>
+            <span>工作习惯库</span>
+            <strong>联系人、项目和排期规律</strong>
+          </div>
+          <em>{formatDateTime(memory.generatedAt)}</em>
+        </div>
+        <p>从历史任务里沉淀可复用线索，帮助判断谁需要提前确认、哪些项目当前积压、哪些事项容易集中在固定日期。</p>
+        <div className="report-metrics memory-metrics">
+          {metrics.map((metric) => (
+            <span key={metric.label}>
+              {metric.label} {metric.value}
+            </span>
+          ))}
+        </div>
+      </section>
+
+      <div className="memory-grid">
+        <MemoryStatsSection
+          emptyText="暂无联系人习惯"
+          items={memory.contacts || []}
+          onViewTask={onViewTask}
+          title="联系人习惯"
+        />
+        <MemoryPatternSection
+          items={memory.schedulePatterns || []}
+          onViewTask={onViewTask}
+        />
+        <MemoryStatsSection
+          emptyText="暂无项目记忆"
+          items={memory.projects || []}
+          onViewTask={onViewTask}
+          title="项目记忆"
+        />
+      </div>
+    </div>
+  );
+}
+
+function MemoryStatsSection({ emptyText, items, onViewTask, title }) {
+  return (
+    <article className="report-section memory-section">
+      <strong>{title}</strong>
+      {items.length === 0 ? (
+        <EmptyState icon={<Wand2 size={22} />} text={emptyText} />
+      ) : (
+        <div className="memory-list">
+          {items.map((item) => (
+            <section className="memory-card" key={item.name}>
+              <div className="memory-card-heading">
+                <strong>{item.name}</strong>
+                <span>{item.total} 件</span>
+              </div>
+              <div className="memory-meta">
+                <span>未完成 {item.active}</span>
+                <span>完成 {item.completed}</span>
+                <span>等待 {item.waiting}</span>
+                <span>逾期 {item.overdue}</span>
+                <span>高优先级 {item.high}</span>
+                {item.latestAt ? <span>最近 {formatDateTime(item.latestAt)}</span> : null}
+              </div>
+              <MemoryTaskList tasks={item.tasks || []} onViewTask={onViewTask} />
+            </section>
+          ))}
+        </div>
+      )}
+    </article>
+  );
+}
+
+function MemoryPatternSection({ items, onViewTask }) {
+  return (
+    <article className="report-section memory-section">
+      <strong>排期规律</strong>
+      {items.length === 0 ? (
+        <EmptyState icon={<CalendarClock size={22} />} text="暂无稳定排期规律" />
+      ) : (
+        <div className="memory-list">
+          {items.map((item) => (
+            <section className="memory-card" key={item.title}>
+              <div className="memory-card-heading">
+                <strong>{item.title}</strong>
+                <span>{item.total} 次</span>
+              </div>
+              <p>{item.detail}</p>
+              <MemoryTaskList tasks={item.tasks || []} onViewTask={onViewTask} />
+            </section>
+          ))}
+        </div>
+      )}
+    </article>
+  );
+}
+
+function MemoryTaskList({ onViewTask, tasks }) {
+  if (tasks.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="organizing-task-list memory-task-list">
+      {tasks.map((task) => (
+        <OrganizingTaskButton key={task.id} onViewTask={onViewTask} task={task} />
+      ))}
+    </div>
+  );
+}
 function AiWorkspacePanel({
   answer,
   draftQuestion,

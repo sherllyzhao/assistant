@@ -1671,40 +1671,143 @@ function getWeekdayLabel(value) {
   return ["周日", "周一", "周二", "周三", "周四", "周五", "周六"][new Date(value).getDay()];
 }
 
-function createAssistantMemoryHints(tasks) {
-  const ownerStats = new Map();
+function getMemoryTimestamp(task) {
+  const timestamps = [task?.updatedAt, task?.completedAt, task?.createdAt, task?.dueAt]
+    .map((value) => getFiniteTime(value))
+    .filter(Number.isFinite);
+
+  return timestamps.length > 0 ? Math.max(...timestamps) : 0;
+}
+
+function createEmptyMemoryStats(name) {
+  return {
+    name,
+    total: 0,
+    active: 0,
+    completed: 0,
+    waiting: 0,
+    overdue: 0,
+    high: 0,
+    latestAt: 0,
+    tasks: [],
+  };
+}
+
+function addTaskToMemoryStats(stats, task, now) {
+  stats.total += 1;
+  stats.active += isActiveTask(task) ? 1 : 0;
+  stats.completed += task?.status === "done" ? 1 : 0;
+  stats.waiting += task?.status === "waiting" ? 1 : 0;
+  stats.overdue += isOverdue(task, now) ? 1 : 0;
+  stats.high += task?.priority === "high" ? 1 : 0;
+  stats.latestAt = Math.max(stats.latestAt, getMemoryTimestamp(task));
+  stats.tasks.push(task);
+}
+
+function sortMemoryStats(left, right) {
+  return (
+    right.overdue - left.overdue ||
+    right.high - left.high ||
+    right.active - left.active ||
+    right.total - left.total ||
+    right.latestAt - left.latestAt
+  );
+}
+
+function finalizeMemoryStats(stats) {
+  return {
+    ...stats,
+    latestAt: stats.latestAt ? new Date(stats.latestAt).toISOString() : "",
+    tasks: stats.tasks.slice().sort(sortAssistantTasksByFocus).slice(0, 4),
+  };
+}
+
+export function createWorkMemoryLibrary(tasks, now = new Date()) {
+  const normalizedTasks = Array.isArray(tasks) ? tasks.filter((task) => task?.id) : [];
+  const contactStats = new Map();
+  const projectStats = new Map();
   const dueWeekdayStats = new Map();
 
-  for (const task of tasks) {
-    if (task?.owner) {
-      const stats = ownerStats.get(task.owner) || { label: task.owner, total: 0, active: 0 };
-      stats.total += 1;
-      stats.active += isActiveTask(task) ? 1 : 0;
-      ownerStats.set(task.owner, stats);
+  for (const task of normalizedTasks) {
+    const owner = String(task?.owner || "").trim();
+    const projectName = getTaskProjectName(task);
+
+    if (owner) {
+      const stats = contactStats.get(owner) || createEmptyMemoryStats(owner);
+      addTaskToMemoryStats(stats, task, now);
+      contactStats.set(owner, stats);
     }
 
-    if (task?.owner && task?.dueAt) {
+    if (owner && task?.dueAt) {
       const weekday = getWeekdayLabel(task.dueAt);
-      const key = `${task.owner}:${weekday}`;
-      const stats = dueWeekdayStats.get(key) || { label: task.owner, weekday, total: 0 };
+      const key = `${owner}:${weekday}`;
+      const stats = dueWeekdayStats.get(key) || {
+        name: owner,
+        weekday,
+        total: 0,
+        latestAt: 0,
+        tasks: [],
+      };
       stats.total += 1;
+      stats.latestAt = Math.max(stats.latestAt, getMemoryTimestamp(task));
+      stats.tasks.push(task);
       dueWeekdayStats.set(key, stats);
+    }
+
+    if (projectName) {
+      const stats = projectStats.get(projectName) || createEmptyMemoryStats(projectName);
+      addTaskToMemoryStats(stats, task, now);
+      projectStats.set(projectName, stats);
     }
   }
 
-  const weekdayHints = Array.from(dueWeekdayStats.values())
+  const contacts = Array.from(contactStats.values())
+    .sort(sortMemoryStats)
+    .map(finalizeMemoryStats)
+    .slice(0, 8);
+  const schedulePatterns = Array.from(dueWeekdayStats.values())
     .filter((stats) => stats.total >= 2)
-    .sort((left, right) => right.total - left.total)
+    .sort((left, right) => right.total - left.total || right.latestAt - left.latestAt)
     .map((stats) => ({
-      title: `${stats.label} · ${stats.weekday}`,
+      title: `${stats.name} · ${stats.weekday}`,
+      name: stats.name,
+      weekday: stats.weekday,
+      total: stats.total,
+      latestAt: stats.latestAt ? new Date(stats.latestAt).toISOString() : "",
       detail: `历史上有 ${stats.total} 条任务集中在${stats.weekday}，排期时建议提前确认。`,
-    }));
+      tasks: stats.tasks.slice().sort(sortAssistantTasksByFocus).slice(0, 4),
+    }))
+    .slice(0, 8);
+  const projects = Array.from(projectStats.values())
+    .sort(sortMemoryStats)
+    .map(finalizeMemoryStats)
+    .slice(0, 8);
 
-  const ownerHints = Array.from(ownerStats.values())
+  return {
+    generatedAt: now.toISOString(),
+    metrics: {
+      taskSamples: normalizedTasks.length,
+      contacts: contacts.length,
+      schedulePatterns: schedulePatterns.length,
+      projects: projects.length,
+    },
+    contacts,
+    schedulePatterns,
+    projects,
+  };
+}
+
+function createAssistantMemoryHints(tasks, now) {
+  const memory = createWorkMemoryLibrary(tasks, now);
+  const weekdayHints = memory.schedulePatterns.map((pattern) => ({
+    title: pattern.title,
+    detail: pattern.detail,
+  }));
+
+  const ownerHints = memory.contacts
     .filter((stats) => stats.total >= 2)
-    .sort((left, right) => right.active - left.active || right.total - left.total)
     .map((stats) => ({
-      title: stats.label,
+      title: stats.name,
       detail: `累计 ${stats.total} 条相关任务，当前 ${stats.active} 条未完成。`,
     }));
 
@@ -1735,7 +1838,7 @@ export function createAiWorkspaceAnswer(tasks, logs, query = "", now = new Date(
   const tomorrow = addLocalDays(now, 1);
   const weekEndTime = endOfLocalWeek(now).getTime();
   const projectGroups = createAssistantProjectGroups(activeTasks, now);
-  const memoryHints = createAssistantMemoryHints(normalizedTasks);
+  const memoryHints = createAssistantMemoryHints(normalizedTasks, now);
   const baseMetrics = {
     active: activeTasks.length,
     completed: completedTasks.length,
