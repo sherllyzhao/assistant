@@ -1746,6 +1746,116 @@ textarea:focus {
   border-radius: 8px;
 }
 
+.memory-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.memory-toolbar {
+  margin-bottom: 4px;
+}
+
+.memory-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  gap: 12px;
+}
+
+.memory-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+}
+
+.memory-section > strong {
+  display: block;
+  font-size: 14px;
+  margin: 0 0 8px 0;
+  color: var(--ink);
+}
+
+.memory-list {
+  display: grid;
+  gap: 10px;
+}
+
+.memory-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 2px 8px rgba(25, 45, 38, 0.06);
+  transition: all 0.2s ease;
+}
+
+.memory-card:hover {
+  box-shadow: 0 4px 12px rgba(25, 45, 38, 0.12);
+  border-color: var(--accent-soft);
+}
+
+.memory-card-heading {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.memory-card-heading strong {
+  font-size: 14px;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.memory-card-heading span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 0 8px;
+  color: var(--accent-strong);
+  background: var(--accent-soft);
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.memory-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.memory-meta span {
+  display: inline-flex;
+  align-items: center;
+  height: 26px;
+  padding: 0 8px;
+  background: var(--surface-muted);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.memory-summary {
+  padding: 16px;
+  background: linear-gradient(135deg, var(--accent-soft) 0%, rgba(220, 238, 232, 0.5) 100%);
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+}
+
+.ai-answer-card.memory-summary {
+  border: 1px solid var(--accent);
+}
+
 .report-card > strong,
 .report-section > strong {
   display: block;
@@ -2935,15 +3045,6 @@ textarea:focus {
     width: 100%;
     max-height: calc(100vh - 20px);
     padding: 14px;
-  }
-}
-
-@keyframes spin {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
   }
 }
 }

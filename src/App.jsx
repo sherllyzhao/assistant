@@ -389,7 +389,6 @@ function App() {
   const [mobileCaptureStatus, setMobileCaptureStatus] = useState("");
   const [isVoiceListening, setIsVoiceListening] = useState(false);
   const [currentTime, setCurrentTime] = useState(() => new Date());
-  const [isRefreshing, setIsRefreshing] = useState(false);
   const saveTimerRef = useRef(0);
   const titleInputRef = useRef(null);
   const reminderAlertTimersRef = useRef(new Map());
@@ -934,31 +933,8 @@ function App() {
     sendNotification(payload).catch((error) => console.error(error));
   }
 
-  async function handleRefresh() {
-    setIsRefreshing(true);
-    try {
-      const loadedData = await loadAppData();
-      setData(loadedData);
-      setAuthError("");
-      setSyncError("");
-      notifyWithFallback({
-        title: "已刷新",
-        body: "任务数据已更新",
-        sound: false,
-        flash: false,
-      });
-    } catch (error) {
-      console.error(error);
-      if (isAuthRequiredError(error)) {
-        setAccount(null);
-        setAuthError(error.message || "请重新登录 Sherlly 账号");
-        setSyncError("");
-        return;
-      }
-      setSyncError(error.message || "刷新失败，请检查网络");
-    } finally {
-      setIsRefreshing(false);
-    }
+  function handleRefresh() {
+    window.location.reload();
   }
 
   function askAssistant(question) {
@@ -2353,10 +2329,9 @@ function App() {
                     className="icon-button"
                     type="button"
                     onClick={handleRefresh}
-                    disabled={isRefreshing}
-                    title="刷新任务数据"
+                    title="刷新页面"
                   >
-                    <RefreshCw size={16} style={{ animation: isRefreshing ? "spin 1s linear infinite" : "none" }} />
+                    <RefreshCw size={16} />
                   </button>
                 </div>
               </div>
