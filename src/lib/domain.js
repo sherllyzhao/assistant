@@ -1109,24 +1109,27 @@ export function toDateTimeInputValue(value) {
 }
 
 export function filterLogsByRange(logs, range, now = new Date()) {
-  const start = new Date(now);
+  const start = startOfLocalDay(now);
 
   if (range === "today") {
-    start.setHours(0, 0, 0, 0);
-  }
-
-  if (range === "week") {
-    const day = start.getDay() || 7;
-    start.setDate(start.getDate() - day + 1);
-    start.setHours(0, 0, 0, 0);
-  }
-
-  if (range === "month") {
+    // 今天：当前日期的 00:00:00
+    // start 已经是 startOfLocalDay，不需要修改
+  } else if (range === "week") {
+    // 本周：从周一 00:00:00 开始
+    const weekStart = getLocalWeekStart(now);
+    start.setDate(weekStart.getDate());
+    start.setMonth(weekStart.getMonth());
+    start.setFullYear(weekStart.getFullYear());
+  } else if (range === "month") {
+    // 本月：从1号 00:00:00 开始
     start.setDate(1);
-    start.setHours(0, 0, 0, 0);
   }
 
-  return logs.filter((log) => new Date(log.createdAt).getTime() >= start.getTime());
+  const startTime = start.getTime();
+  return logs.filter((log) => {
+    const logTime = getFiniteTime(log.createdAt);
+    return Number.isFinite(logTime) && logTime >= startTime;
+  });
 }
 
 function normalizeTaskTitleExactKey(value) {
@@ -1483,47 +1486,49 @@ function getAssistantQuestionIntent(query, keywords) {
     return "help";
   }
 
-  if (/日报|周报|月报|总结|复盘|最近做了|今天做了|本周做了|完成了|已完成|做完/.test(question)) {
+  if (/日报|周报|月报|总结|复盘|最近做了|今天做了|本周做了|完成了|已完成|做完|这周做了/.test(question)) {
     return "report";
   }
 
-  if (/逾期|过期|风险|来不及|最急|紧急|催办|提醒|危险/.test(question)) {
+  if (/逾期|过期|风险|来不及|最急|紧急|催办|提醒|危险|有问题/.test(question)) {
     return "risk";
   }
 
-  if (/明天|明日|明儿/.test(question)) {
+  if (/明天|明日|明儿|下一个/.test(question)) {
     return "tomorrow";
   }
 
-  if (/等待|他人|对方|回复|反馈/.test(question)) {
+  if (/等待|他人|对方|回复|反馈|等他/.test(question)) {
     return "waiting";
   }
 
-  if (/长期|很久|停滞|卡住|拖了|推进/.test(question)) {
+  if (/长期|很久|停滞|卡住|拖了|推进|没动/.test(question)) {
     return "stale";
   }
 
-  if (/截止|到期|时间|什么时候|哪天|排期|日程|安排/.test(question)) {
+  if (/截止|到期|时间|什么时候|哪天|排期|日程|安排|时间线/.test(question)) {
     return "schedule";
   }
 
-  if (/(本周|这周|周|星期)/.test(question) && /(重要|重点|优先|安排|事情|事项|任务)/.test(question)) {
+  // 关键词搜索优先级提高，但要求既有关键词又有状态指示
+  if (keywords.length > 0 && /(未完成|没完成|待办|还没做|还没有做|进行中|没做完|没有完成)/.test(question)) {
+    return "active-search";
+  }
+
+  if (/(本周|这周|周|星期)/.test(question) && /(重要|重点|优先|安排|事情|事项|任务|做什么|该做)/.test(question)) {
     return "week";
   }
 
-  if (/先做|现在.*(?:做|干)|该.*(?:做|干)|接下来|优先|最重要|重点|重要/.test(question)) {
+  if (/先做|现在.*(?:做|干)|该.*(?:做|干)|接下来|优先|最重要|重点|重要|现在应该|应该先/.test(question)) {
     return "focus";
-  }
-
-  if (keywords.length > 0 && /(未完成|没完成|待办|还没做|还没有做|进行中|没做完)/.test(question)) {
-    return "active-search";
   }
 
   if (/(今天|今日|还剩|还有|没完成|未完成|待办)/.test(question)) {
     return "today";
   }
 
-  if (keywords.length > 0 || /进展|情况|怎么样|如何/.test(question)) {
+  // progress意图：有关键词且问"进展/情况"
+  if (keywords.length > 0 && /进展|情况|怎么样|如何|什么情况/.test(question)) {
     return "progress";
   }
 
@@ -1727,17 +1732,22 @@ export function createWorkMemoryLibrary(tasks, now = new Date()) {
   const contactStats = new Map();
   const projectStats = new Map();
   const dueWeekdayStats = new Map();
+  const contactTagStats = new Map();
+  const staleTasks = [];
 
   for (const task of normalizedTasks) {
     const owner = String(task?.owner || "").trim();
     const projectName = getTaskProjectName(task);
+    const tags = Array.isArray(task?.tags) ? task.tags : [];
 
+    // 联系人统计
     if (owner) {
       const stats = contactStats.get(owner) || createEmptyMemoryStats(owner);
       addTaskToMemoryStats(stats, task, now);
       contactStats.set(owner, stats);
     }
 
+    // 联系人 + 工作日规律
     if (owner && task?.dueAt) {
       const weekday = getWeekdayLabel(task.dueAt);
       const key = `${owner}:${weekday}`;
@@ -1754,17 +1764,56 @@ export function createWorkMemoryLibrary(tasks, now = new Date()) {
       dueWeekdayStats.set(key, stats);
     }
 
+    // 联系人 + 标签关联
+    if (owner && tags.length > 0) {
+      for (const tag of tags) {
+        const key = `${owner}:${tag}`;
+        const count = (contactTagStats.get(key) || 0) + 1;
+        contactTagStats.set(key, count);
+      }
+    }
+
+    // 项目统计
     if (projectName) {
       const stats = projectStats.get(projectName) || createEmptyMemoryStats(projectName);
       addTaskToMemoryStats(stats, task, now);
       projectStats.set(projectName, stats);
     }
+
+    // 长期未动静的任务（超过14天未更新且仍未完成）
+    if (isActiveTask(task)) {
+      const lastUpdateTime = getFiniteTime(task.updatedAt || task.createdAt);
+      const daysSinceUpdate = (now.getTime() - lastUpdateTime) / (1000 * 60 * 60 * 24);
+      if (daysSinceUpdate > 14) {
+        staleTasks.push({
+          task,
+          daysSinceUpdate: Math.floor(daysSinceUpdate),
+        });
+      }
+    }
   }
 
   const contacts = Array.from(contactStats.values())
     .sort(sortMemoryStats)
-    .map(finalizeMemoryStats)
+    .map((stats) => {
+      const finalStats = finalizeMemoryStats(stats);
+      // 找出这个联系人最常关联的标签
+      const topTags = Array.from(contactTagStats.entries())
+        .filter(([key]) => key.startsWith(`${stats.name}:`))
+        .map(([key, count]) => ({
+          tag: key.substring(stats.name.length + 1),
+          count,
+        }))
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 2)
+        .map((item) => item.tag);
+      return {
+        ...finalStats,
+        topTags,
+      };
+    })
     .slice(0, 8);
+
   const schedulePatterns = Array.from(dueWeekdayStats.values())
     .filter((stats) => stats.total >= 2)
     .sort((left, right) => right.total - left.total || right.latestAt - left.latestAt)
@@ -1778,10 +1827,21 @@ export function createWorkMemoryLibrary(tasks, now = new Date()) {
       tasks: stats.tasks.slice().sort(sortAssistantTasksByFocus).slice(0, 4),
     }))
     .slice(0, 8);
+
   const projects = Array.from(projectStats.values())
     .sort(sortMemoryStats)
     .map(finalizeMemoryStats)
     .slice(0, 8);
+
+  // 长期未动的预警
+  const staleWarnings = staleTasks
+    .sort((a, b) => b.daysSinceUpdate - a.daysSinceUpdate)
+    .slice(0, 3)
+    .map((item) => ({
+      task: item.task,
+      daysSinceUpdate: item.daysSinceUpdate,
+      warning: `${item.task.title} 已经 ${item.daysSinceUpdate} 天未更新，可能需要跟进或重新评估。`,
+    }));
 
   return {
     generatedAt: now.toISOString(),
@@ -1794,6 +1854,7 @@ export function createWorkMemoryLibrary(tasks, now = new Date()) {
     contacts,
     schedulePatterns,
     projects,
+    staleWarnings,
   };
 }
 
@@ -1850,6 +1911,22 @@ export function createAiWorkspaceAnswer(tasks, logs, query = "", now = new Date(
     "安全速记内容不会参与 AI 工作台分析，避免把密码类信息混进普通工作流。",
   ];
 
+  // 生成动态风险提示
+  const generateRiskTips = () => {
+    const tips = [];
+    if (overdueTasks.length > 0) {
+      tips.push(`⚠️ 有 ${overdueTasks.length} 件已逾期任务，建议立即处理。`);
+    }
+    if (waitingTasks.length > 0) {
+      tips.push(`⏳ 有 ${waitingTasks.length} 件等待他人反馈，可以考虑催办或寻找替代方案。`);
+    }
+    const dueToday = activeTasks.filter((t) => isTaskDueBefore(t, endOfLocalDay(now).getTime()) && !isOverdue(t, now));
+    if (dueToday.length > 0) {
+      tips.push(`📅 今天还有 ${dueToday.length} 件截止，排好执行顺序。`);
+    }
+    return tips.length > 0 ? tips : baseTips;
+  };
+
   if (intent === "help") {
     return {
       intent,
@@ -1866,6 +1943,7 @@ export function createAiWorkspaceAnswer(tasks, logs, query = "", now = new Date(
       tips: baseTips,
       usedQuery: cleanQuery,
       generatedAt: now.toISOString(),
+      isFallback: false,
     };
   }
 
@@ -1875,12 +1953,13 @@ export function createAiWorkspaceAnswer(tasks, logs, query = "", now = new Date(
       .filter((task, index, list) => list.findIndex((item) => item.id === task.id) === index)
       .sort(sortAssistantTasksByFocus)
       .slice(0, 8);
+    const riskScore = overdueTasks.length * 3 + waitingTasks.length * 2 + dueSoonTasks.filter(t => !isOverdue(t, now)).length;
 
     return {
       intent,
       label: "风险扫描",
-      title: "需要马上留意的风险",
-      summary: `风险主要来自 ${overdueTasks.length} 件逾期、${waitingTasks.length} 件等待他人，以及 ${dueSoonTasks.length} 件高优先级或今日到期任务。`,
+      title: riskScore > 10 ? "⚠️ 风险较高，建议立即处理" : riskScore > 5 ? "⚠️ 存在一些风险" : "🟡 风险水平正常",
+      summary: `风险评分 ${riskScore}/20。来源：${overdueTasks.length} 件逾期、${waitingTasks.length} 件等待他人回复、${dueSoonTasks.filter(t => !isOverdue(t, now)).length} 件高优先级或今日到期。`,
       taskSectionTitle: "风险任务",
       metrics: {
         ...baseMetrics,
@@ -1891,9 +1970,10 @@ export function createAiWorkspaceAnswer(tasks, logs, query = "", now = new Date(
       memoryHints,
       recentLogs: createAssistantLogScope(normalizedLogs, "today", now),
       keywords,
-      tips: baseTips,
+      tips: generateRiskTips(),
       usedQuery: cleanQuery,
       generatedAt: now.toISOString(),
+      isFallback: primaryTasks.length === 0,
     };
   }
 
@@ -1902,12 +1982,21 @@ export function createAiWorkspaceAnswer(tasks, logs, query = "", now = new Date(
       .filter((task) => task.priority === "high" || isOverdue(task, now) || isTaskDueBefore(task, todayEndTime) || task.status === "doing")
       .sort(sortAssistantTasksByFocus)
       .slice(0, 8);
+    const focusTips = [];
+    if (activeTasks.length > 10) {
+      focusTips.push(`📊 你有 ${activeTasks.length} 件未完成任务，建议集中精力在优先级最高的 3-5 件上。`);
+    }
+    if (primaryTasks.length === 0) {
+      focusTips.push("✅ 目前没有特别紧迫的任务，可以选择之前暂停的工作继续推进。");
+    } else {
+      focusTips.push(`🎯 建议按顺序处理这 ${primaryTasks.length} 件任务。`);
+    }
 
     return {
       intent,
       label: "优先级建议",
-      title: "现在建议先处理这些",
-      summary: `我按逾期、优先级、截止时间和进行中状态排序。当前最值得先看的有 ${primaryTasks.length || activeTasks.length} 件。`,
+      title: primaryTasks.length > 0 ? "🎯 现在先处理这些" : "✅ 当前没有紧迫任务",
+      summary: `按逾期、优先级、截止时间和进行中状态排序。${primaryTasks.length > 0 ? `当前最值得先看的有 ${primaryTasks.length} 件。` : "你的任务优先级分布合理。"}`,
       taskSectionTitle: "优先处理",
       metrics: baseMetrics,
       primaryTasks: primaryTasks.length > 0 ? primaryTasks : activeTasks.slice().sort(sortAssistantTasksByFocus).slice(0, 8),
@@ -1915,9 +2004,10 @@ export function createAiWorkspaceAnswer(tasks, logs, query = "", now = new Date(
       memoryHints,
       recentLogs: createAssistantLogScope(normalizedLogs, "today", now),
       keywords,
-      tips: baseTips,
+      tips: focusTips.length > 0 ? focusTips : baseTips,
       usedQuery: cleanQuery,
       generatedAt: now.toISOString(),
+      isFallback: primaryTasks.length === 0,
     };
   }
 
@@ -1926,12 +2016,15 @@ export function createAiWorkspaceAnswer(tasks, logs, query = "", now = new Date(
       .filter((task) => isWithinLocalDay(task.dueAt, tomorrow) || (!task.dueAt && task.priority === "high"))
       .sort(sortAssistantTasksByFocus)
       .slice(0, 8);
+    const tomorrowTips = primaryTasks.length > 0
+      ? [`📅 明天有 ${primaryTasks.length} 件任务，今天最好提前准备关键信息。`]
+      : ["✅ 明天没有特别安排，可以提前规划后天的工作。"];
 
     return {
       intent,
       label: "明日安排",
-      title: "明天要盯住的事",
-      summary: `明天截止或适合提前安排的任务有 ${primaryTasks.length} 件；如果为空，说明当前任务里没有明确的明日截止时间。`,
+      title: primaryTasks.length > 0 ? "📅 明天要盯住的事" : "✅ 明天日程充足",
+      summary: `明天截止或适合提前安排的任务有 ${primaryTasks.length} 件；${primaryTasks.length === 0 ? "说明当前任务里没有明确的明日截止时间。" : "建议今天就完成准备工作。"}`,
       taskSectionTitle: "明日任务",
       metrics: baseMetrics,
       primaryTasks,
@@ -1939,9 +2032,10 @@ export function createAiWorkspaceAnswer(tasks, logs, query = "", now = new Date(
       memoryHints,
       recentLogs: createAssistantLogScope(normalizedLogs, "week", now),
       keywords,
-      tips: baseTips,
+      tips: tomorrowTips,
       usedQuery: cleanQuery,
       generatedAt: now.toISOString(),
+      isFallback: primaryTasks.length === 0,
     };
   }
 

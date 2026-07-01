@@ -391,6 +391,8 @@ function App() {
   const [mobileCaptureStatus, setMobileCaptureStatus] = useState("");
   const [isVoiceListening, setIsVoiceListening] = useState(false);
   const [currentTime, setCurrentTime] = useState(() => new Date());
+  const [isViewTransitioning, setIsViewTransitioning] = useState(false);
+  const prevActiveViewRef = useRef("tasks");
   const saveTimerRef = useRef(0);
   const titleInputRef = useRef(null);
   const reminderAlertTimersRef = useRef(new Map());
@@ -403,6 +405,15 @@ function App() {
 
     return () => window.clearInterval(intervalId);
   }, []);
+
+  useEffect(() => {
+    if (activeView !== prevActiveViewRef.current) {
+      prevActiveViewRef.current = activeView;
+      setIsViewTransitioning(true);
+      const timeoutId = window.setTimeout(() => setIsViewTransitioning(false), 100);
+      return () => window.clearTimeout(timeoutId);
+    }
+  }, [activeView]);
 
   useEffect(() => {
     let isCancelled = false;
@@ -2295,7 +2306,7 @@ function App() {
         ))}
       </section>
 
-      <div className={`workspace-grid ${["profile", "vault", "memory"].includes(activeView) ? "profile-grid" : ""}`}>
+      <div className={`workspace-grid ${["profile", "vault", "memory"].includes(activeView) ? "profile-grid" : ""} ${isViewTransitioning ? "is-transitioning" : ""}`}>
         <section
           className="task-area"
           aria-label={
@@ -2440,7 +2451,7 @@ function App() {
               organizingSuggestions={organizingSuggestions}
               visibleLogs={visibleLogs}
             />
-          )}}
+          )}
         </section>
 
         {["profile", "vault", "memory", "tools"].includes(activeView) ? null : (
