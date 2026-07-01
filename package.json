@@ -24,7 +24,10 @@
     "renderer:config": "node scripts/write-renderer-config.cjs",
     "pack:win": "npm run renderer:config && npm run check && npm run build && electron-builder --win nsis --x64 --publish never",
     "release:win": "npm run renderer:config && npm run check && npm run build && electron-builder --win nsis --x64 --publish always",
-    "check": "node --check electron/main.cjs && node --check electron/preload.cjs && node --check scripts/check-project.cjs && node --check scripts/start-desktop.cjs && node --check scripts/write-renderer-config.cjs && node --check server/index.cjs && node scripts/check-project.cjs"
+    "check": "node --check electron/main.cjs && node --check electron/preload.cjs && node --check scripts/check-project.cjs && node --check scripts/start-desktop.cjs && node --check scripts/write-renderer-config.cjs && node --check server/index.cjs && node scripts/check-project.cjs",
+    "tools:list": "bash tools-library/get-tool.sh list",
+    "tools:search": "bash tools-library/get-tool.sh search",
+    "tools:info": "bash tools-library/get-tool.sh info"
   },
   "dependencies": {
     "cors": "^2.8.6",
