@@ -100,6 +100,7 @@ import {
   openAttachment,
   registerAccount,
 } from "./lib/storage.js";
+import { ToolsLibraryPanel } from "./components/ToolsLibraryPanel.jsx";
 
 const filterOptions = [
   { value: "active", label: "未完成" },
@@ -130,6 +131,7 @@ const viewOptions = [
   { value: "memory", label: "长期记忆", description: "沉淀联系人、项目和排期习惯" },
   { value: "vault", label: "安全速记", description: "保存账号、密码和密钥" },
   { value: "report", label: "工作日报", description: "查看日报概览与日志明细" },
+  { value: "tools", label: "🛠️ 工具库", description: "查询和管理常用小工具" },
 ];
 
 const assistantQuestionPresets = [
@@ -2423,6 +2425,8 @@ function App() {
               memory={workMemoryLibrary}
               onViewTask={(task) => setDetailTaskId(task.id)}
             />
+          ) : activeView === "tools" ? (
+            <ToolsLibraryPanel />
           ) : (
             <ReportPanel
               dailyReport={dailyReport}
@@ -2436,10 +2440,10 @@ function App() {
               organizingSuggestions={organizingSuggestions}
               visibleLogs={visibleLogs}
             />
-          )}
+          )}}
         </section>
 
-        {["profile", "vault", "memory"].includes(activeView) ? null : (
+        {["profile", "vault", "memory", "tools"].includes(activeView) ? null : (
         <aside className="side-rail" aria-label="录入与候选任务">
           <section className="panel">
             <div className="panel-heading">
