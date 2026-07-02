@@ -2742,7 +2742,7 @@ function App() {
             <div className="candidate-list">
               {data.candidates.length === 0 ? (
                 <EmptyState icon={<Megaphone size={22} />} text="暂无候选事项" />
-              ) : (
+              ) :
                 data.candidates.map((candidate) => (
                   <article className="candidate-item" key={candidate.id}>
                     <p>{candidate.text}</p>
@@ -2757,8 +2757,12 @@ function App() {
                     </div>
                   </article>
                 ))
-              )}
+              }
             </div>
+          </section>
+
+        </aside>
+        )}
           </section>
 
         </aside>
@@ -3170,6 +3174,7 @@ function WorkMemoryPanel({ memory, onViewTask }) {
     { label: "排期规律", value: memory.metrics?.schedulePatterns || 0 },
     { label: "项目", value: memory.metrics?.projects || 0 },
   ];
+  const staleWarnings = Array.isArray(memory.staleWarnings) ? memory.staleWarnings : [];
 
   return (
     <div className="memory-panel">
@@ -3198,6 +3203,32 @@ function WorkMemoryPanel({ memory, onViewTask }) {
           ))}
         </div>
       </section>
+
+      {staleWarnings.length > 0 ? (
+        <section className="organizing-panel" aria-label="长期未动任务预警">
+          <div className="organizing-heading">
+            <div>
+              <p className="eyebrow">Stale Tasks</p>
+              <h3>⚠️ 长期未动任务</h3>
+            </div>
+            <span>{staleWarnings.length} 条预警</span>
+          </div>
+          <div className="organizing-list">
+            {staleWarnings.map((warning) => (
+              <article key={warning.task.id} className="organizing-card stale">
+                <div className="organizing-card-heading">
+                  <strong>{warning.task.title}</strong>
+                  <span>{warning.daysSinceUpdate} 天</span>
+                </div>
+                <p>{warning.warning}</p>
+                <button className="secondary-button" type="button" onClick={() => onViewTask(warning.task)}>
+                  查看详情
+                </button>
+              </article>
+            ))}
+          </div>
+        </section>
+      ) : null}
 
       <div className="memory-grid">
         <MemoryStatsSection
