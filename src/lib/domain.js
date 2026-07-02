@@ -1260,6 +1260,18 @@ export function createTaskOrganizingSuggestions(tasks, now = new Date()) {
   const staleTasks = [];
   const usedSimilarTaskIds = new Set();
   const tasksByExactTitle = new Map();
+  const similarityCache = new Map();
+
+  // 快速相似度查询（带缓存）
+  const getCachedSimilarity = (leftTitle, rightTitle) => {
+    const key = [leftTitle, rightTitle].sort().join("||");
+    if (similarityCache.has(key)) {
+      return similarityCache.get(key);
+    }
+    const similarity = getTitleSimilarity(leftTitle, rightTitle);
+    similarityCache.set(key, similarity);
+    return similarity;
+  };
 
   for (const task of activeTasks) {
     const key = normalizeTaskTitleExactKey(task.title);
@@ -1300,6 +1312,7 @@ export function createTaskOrganizingSuggestions(tasks, now = new Date()) {
     }
   }
 
+  // O(n²)相似度比较，但用缓存和早停策略优化
   for (let leftIndex = 0; leftIndex < activeTasks.length; leftIndex += 1) {
     const leftTask = activeTasks[leftIndex];
 
@@ -1309,6 +1322,7 @@ export function createTaskOrganizingSuggestions(tasks, now = new Date()) {
 
     const group = [leftTask];
 
+    // 只与后续任务比较（不重复）
     for (let rightIndex = leftIndex + 1; rightIndex < activeTasks.length; rightIndex += 1) {
       const rightTask = activeTasks[rightIndex];
 
@@ -1316,7 +1330,7 @@ export function createTaskOrganizingSuggestions(tasks, now = new Date()) {
         continue;
       }
 
-      const similarity = getTitleSimilarity(leftTask.title, rightTask.title);
+      const similarity = getCachedSimilarity(leftTask.title, rightTask.title);
 
       if (similarity >= mergeableSimilarityThreshold && similarity < 1) {
         group.push(rightTask);
@@ -1673,7 +1687,13 @@ function createAssistantProjectGroups(tasks, now) {
 }
 
 function getWeekdayLabel(value) {
-  return ["周日", "周一", "周二", "周三", "周四", "周五", "周六"][new Date(value).getDay()];
+  const time = getFiniteTime(value);
+  if (!Number.isFinite(time)) {
+    return "未知";
+  }
+  const date = new Date(time);
+  const localDay = date.getDay();
+  return ["周日", "周一", "周二", "周三", "周四", "周五", "周六"][localDay];
 }
 
 function getMemoryTimestamp(task) {
@@ -2048,8 +2068,10 @@ export function createAiWorkspaceAnswer(tasks, logs, query = "", now = new Date(
     return {
       intent,
       label: "截止安排",
-      title: "有明确时间的任务",
-      summary: `当前有 ${primaryTasks.length} 件任务带截止或提醒时间；按优先级和最近截止排序。`,
+      title: primaryTasks.length > 0 ? "📅 有明确时间的任务" : "✅ 没有带截止时间的任务",
+      summary: primaryTasks.length > 0
+        ? `当前有 ${primaryTasks.length} 件任务带截止或提醒时间；按优先级和最近截止排序。`
+        : "暂时没有任务带截止时间，可以给关键任务补上截止日期方便跟进。",
       taskSectionTitle: "时间线",
       metrics: baseMetrics,
       primaryTasks,
@@ -2060,6 +2082,7 @@ export function createAiWorkspaceAnswer(tasks, logs, query = "", now = new Date(
       tips: baseTips,
       usedQuery: cleanQuery,
       generatedAt: now.toISOString(),
+      isFallback: primaryTasks.length === 0,
     };
   }
 

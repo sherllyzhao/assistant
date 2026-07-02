@@ -3,7 +3,9 @@
     "allow": [
       "mcp__context7__resolve-library-id",
       "mcp__context7__query-docs",
-      "WebFetch(domain:electron-vite.org)"
+      "WebFetch(domain:electron-vite.org)",
+      "mcp__fast-context__fast_context_search",
+      "mcp__fast-context__extract_windsurf_key"
     ]
   }
 }
