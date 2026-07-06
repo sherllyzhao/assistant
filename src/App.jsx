@@ -2742,7 +2742,7 @@ function App() {
             <div className="candidate-list">
               {data.candidates.length === 0 ? (
                 <EmptyState icon={<Megaphone size={22} />} text="暂无候选事项" />
-              ) :
+              ) : (
                 data.candidates.map((candidate) => (
                   <article className="candidate-item" key={candidate.id}>
                     <p>{candidate.text}</p>
@@ -2757,12 +2757,8 @@ function App() {
                     </div>
                   </article>
                 ))
-              }
+              )}
             </div>
-          </section>
-
-        </aside>
-        )}
           </section>
 
         </aside>

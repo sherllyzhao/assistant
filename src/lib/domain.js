@@ -30,6 +30,22 @@ export const vaultCategories = [
 
 export const DEFAULT_FTP_CLIENT_PATH = "D:\\ftp\\FlashFXP\\flashfxp.exe";
 
+export const toolCategories = [
+  { value: "script", label: "脚本" },
+  { value: "cli", label: "命令行工具" },
+  { value: "application", label: "应用程序" },
+  { value: "library", label: "代码库" },
+  { value: "document", label: "文档" },
+  { value: "other", label: "其他" },
+];
+
+export const emptyToolDraft = {
+  name: "",
+  path: "",
+  description: "",
+  category: "other",
+};
+
 export const dailySlots = [
   { value: "morning", label: "早上", startHour: 6, endHour: 12 },
   { value: "noon", label: "中午", startHour: 12, endHour: 14 },
@@ -53,6 +69,57 @@ export const emptyLaunchAction = {
   type: "none",
   target: "",
 };
+
+export function getToolCategoryMeta(category) {
+  return toolCategories.find((item) => item.value === category) || toolCategories[toolCategories.length - 1];
+}
+
+export function createTool(draft, now = new Date()) {
+  const name = String(draft?.name || "").trim();
+  const path = String(draft?.path || "").trim();
+
+  if (!name) {
+    throw new Error("工具名称不能为空");
+  }
+
+  if (!path) {
+    throw new Error("工具路径不能为空");
+  }
+
+  return {
+    id: createId("tool"),
+    name,
+    path,
+    description: String(draft?.description || "").trim(),
+    category: toolCategories.some((opt) => opt.value === draft?.category) ? draft.category : "other",
+    createdAt: now.toISOString(),
+    updatedAt: now.toISOString(),
+  };
+}
+
+export function normalizeTool(item) {
+  if (!item?.id) {
+    return null;
+  }
+
+  return {
+    id: String(item.id),
+    name: String(item.name || "").trim(),
+    path: String(item.path || "").trim(),
+    description: String(item.description || "").trim(),
+    category: toolCategories.some((opt) => opt.value === item?.category) ? item.category : "other",
+    createdAt: item?.createdAt || new Date().toISOString(),
+    updatedAt: item?.updatedAt || item?.createdAt || new Date().toISOString(),
+  };
+}
+
+export function normalizeTools(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.map((item) => normalizeTool(item)).filter(Boolean);
+}
 
 export const emptyTaskDraft = {
   title: "",

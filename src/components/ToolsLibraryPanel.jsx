@@ -1,9 +1,82 @@
-import { ExternalLink, Download, FileText, FolderOpen } from "lucide-react";
+import { useState, useEffect } from "react";
+import { ExternalLink, Download, FileText, FolderOpen, Plus, Search, Trash2, Copy, Edit2 } from "lucide-react";
 import { getToolsLibraryLinks, getToolsLibraryCommands, openToolsLibrary } from "../lib/toolsLibrary.js";
+import { loadToolsData, saveToolsData, searchTools, filterToolsByCategory } from "../lib/toolsLibrary.js";
+import { toolCategories, emptyToolDraft, createTool, getToolCategoryMeta } from "../lib/domain.js";
 
 export function ToolsLibraryPanel() {
   const links = getToolsLibraryLinks();
   const commands = getToolsLibraryCommands();
+
+  const [tools, setTools] = useState([]);
+  const [draft, setDraft] = useState({ ...emptyToolDraft });
+  const [editingId, setEditingId] = useState("");
+  const [searchKeyword, setSearchKeyword] = useState("");
+  const [categoryFilter, setCategoryFilter] = useState("");
+  const [showForm, setShowForm] = useState(false);
+
+  useEffect(() => {
+    setTools(loadToolsData());
+  }, []);
+
+  const filteredTools = filterToolsByCategory(searchTools(tools, searchKeyword), categoryFilter);
+
+  function updateDraft(key, value) {
+    setDraft((prev) => ({ ...prev, [key]: value }));
+  }
+
+  function resetDraft() {
+    setDraft({ ...emptyToolDraft });
+    setEditingId("");
+  }
+
+  function submitTool(event) {
+    event.preventDefault();
+
+    try {
+      let newTools;
+
+      if (editingId) {
+        const tool = createTool(draft);
+        newTools = tools.map((t) => (t.id === editingId ? { ...tool, id: editingId } : t));
+      } else {
+        const tool = createTool(draft);
+        newTools = [...tools, tool];
+      }
+
+      saveToolsData(newTools);
+      setTools(newTools);
+      resetDraft();
+      setShowForm(false);
+    } catch (error) {
+      alert(error.message || "保存失败");
+    }
+  }
+
+  function deleteTool(id) {
+    if (confirm("确定要删除这个工具吗？")) {
+      const newTools = tools.filter((t) => t.id !== id);
+      saveToolsData(newTools);
+      setTools(newTools);
+    }
+  }
+
+  function editTool(tool) {
+    setDraft({
+      name: tool.name,
+      path: tool.path,
+      description: tool.description,
+      category: tool.category,
+    });
+    setEditingId(tool.id);
+    setShowForm(true);
+  }
+
+  function copyPath(path) {
+    navigator.clipboard.writeText(path).then(() => {
+      alert("路径已复制到剪贴板");
+    });
+  }
 
   async function handleOpenSection(section) {
     try {
@@ -31,6 +104,145 @@ export function ToolsLibraryPanel() {
         </div>
       </div>
 
+      {/* 工具管理区域 */}
+      <section className="tools-section">
+        <h3>🔧 我的工具</h3>
+
+        {/* 工具添加表单 */}
+        {showForm && (
+          <form className="tool-form" onSubmit={submitTool}>
+            <label>
+              工具名称
+              <input
+                value={draft.name}
+                onChange={(e) => updateDraft("name", e.target.value)}
+                placeholder="例如：打包脚本、备份工具"
+                autoFocus
+              />
+            </label>
+
+            <label>
+              保存路径
+              <input
+                value={draft.path}
+                onChange={(e) => updateDraft("path", e.target.value)}
+                placeholder="例如：D:\tools\backup.sh 或 C:\Program Files\App\app.exe"
+              />
+            </label>
+
+            <label>
+              分类
+              <select value={draft.category} onChange={(e) => updateDraft("category", e.target.value)}>
+                {toolCategories.map((cat) => (
+                  <option key={cat.value} value={cat.value}>
+                    {cat.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label>
+              描述（可选）
+              <textarea
+                value={draft.description}
+                onChange={(e) => updateDraft("description", e.target.value)}
+                placeholder="说明这个工具的用途"
+                rows={2}
+              />
+            </label>
+
+            <div className="form-actions">
+              <button className="secondary-button" type="button" onClick={resetDraft}>
+                取消
+              </button>
+              <button className="primary-button" type="submit">
+                {editingId ? "保存修改" : "添加工具"}
+              </button>
+            </div>
+          </form>
+        )}
+
+        {/* 搜索和过滤 */}
+        <div className="tools-controls">
+          <div className="search-box">
+            <Search size={16} />
+            <input
+              type="text"
+              value={searchKeyword}
+              onChange={(e) => setSearchKeyword(e.target.value)}
+              placeholder="搜索工具名称或路径..."
+            />
+          </div>
+
+          <select
+            value={categoryFilter}
+            onChange={(e) => setCategoryFilter(e.target.value)}
+            className="category-filter"
+          >
+            <option value="">全部分类</option>
+            {toolCategories.map((cat) => (
+              <option key={cat.value} value={cat.value}>
+                {cat.label}
+              </option>
+            ))}
+          </select>
+
+          {!showForm && (
+            <button className="secondary-button" onClick={() => setShowForm(true)}>
+              <Plus size={16} />
+              添加工具
+            </button>
+          )}
+        </div>
+
+        {/* 工具列表 */}
+        {filteredTools.length === 0 ? (
+          <div className="empty-state">
+            <p>{tools.length === 0 ? "还没有保存工具，点击上面的按钮添加吧" : "搜索没有找到匹配的工具"}</p>
+          </div>
+        ) : (
+          <div className="tools-list">
+            {filteredTools.map((tool) => (
+              <article className="tool-item" key={tool.id}>
+                <div className="tool-header">
+                  <strong>{tool.name}</strong>
+                  <span className="category-badge">{getToolCategoryMeta(tool.category).label}</span>
+                </div>
+                <code className="tool-path">{tool.path}</code>
+                {tool.description && <p className="tool-description">{tool.description}</p>}
+                <div className="tool-actions">
+                  <button
+                    className="icon-button"
+                    type="button"
+                    onClick={() => copyPath(tool.path)}
+                    title="复制路径"
+                  >
+                    <Copy size={16} />
+                  </button>
+                  <button
+                    className="icon-button"
+                    type="button"
+                    onClick={() => editTool(tool)}
+                    title="编辑"
+                  >
+                    <Edit2 size={16} />
+                  </button>
+                  <button
+                    className="icon-button danger"
+                    type="button"
+                    onClick={() => deleteTool(tool.id)}
+                    title="删除"
+                  >
+                    <Trash2 size={16} />
+                  </button>
+                </div>
+              </article>
+            ))}
+          </div>
+        )}
+      </section>
+
+      {/* 快速访问 */}
       <section className="tools-section">
         <h3>📚 快速访问</h3>
         <div className="tools-grid">
@@ -55,6 +267,7 @@ export function ToolsLibraryPanel() {
         </div>
       </section>
 
+      {/* 命令行快速命令 */}
       <section className="tools-section">
         <h3>⌨️ 命令行快速命令</h3>
         <div className="commands-list">
@@ -77,32 +290,15 @@ export function ToolsLibraryPanel() {
         </div>
       </section>
 
+      {/* 使用提示 */}
       <section className="tools-section">
         <h3>💡 使用提示</h3>
         <ul className="tips-list">
-          <li>在秘书项目根目录运行命令行工具快速查询工具</li>
-          <li>工具库支持按分类、关键词搜索和详细查询</li>
-          <li>添加新工具时，更新 tools.json 和 README.md</li>
-          <li>所有工具文件都通过 Git 版本控制管理</li>
+          <li>在这里记录你常用工具的路径，再也不用担心忘记在哪了</li>
+          <li>支持按工具名称、路径或描述搜索</li>
+          <li>可以按分类筛选，快速定位工具</li>
+          <li>一键复制路径，直接粘贴到需要的地方</li>
         </ul>
-      </section>
-
-      <section className="tools-section">
-        <h3>📂 项目结构</h3>
-        <div className="structure-info">
-          <code className="code-block">
-{`tools-library/
-├── README.md           # 可视化工具索引
-├── tools.json          # 工具元数据库
-├── get-tool.sh         # 查询脚本
-├── docs/
-│   └── TOOLS.md        # 详细文档
-└── local/
-    ├── scripts/        # Shell 脚本
-    ├── cli-tools/      # CLI 工具
-    └── utils/          # 实用工具`}
-          </code>
-        </div>
       </section>
     </div>
   );

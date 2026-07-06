@@ -1,7 +1,63 @@
 // 工具库访问模块
 // 提供统一的工具库数据访问接口
+import { normalizeTools } from "./domain.js";
 
 const TOOLS_LIBRARY_PATH = "../../../tools-library";
+const TOOLS_STORAGE_KEY = "sherlly_tools_library";
+
+/**
+ * 从本地存储加载工具列表
+ */
+export function loadToolsData() {
+  try {
+    const stored = localStorage.getItem(TOOLS_STORAGE_KEY);
+    return normalizeTools(stored ? JSON.parse(stored) : []);
+  } catch (error) {
+    console.error("Failed to load tools data:", error);
+    return [];
+  }
+}
+
+/**
+ * 保存工具列表到本地存储
+ */
+export function saveToolsData(tools) {
+  try {
+    const normalized = normalizeTools(tools);
+    localStorage.setItem(TOOLS_STORAGE_KEY, JSON.stringify(normalized));
+    return normalized;
+  } catch (error) {
+    console.error("Failed to save tools data:", error);
+    throw new Error("无法保存工具数据");
+  }
+}
+
+/**
+ * 搜索工具
+ */
+export function searchTools(tools, keyword) {
+  const cleanKeyword = String(keyword || "").toLowerCase().trim();
+
+  if (!cleanKeyword) {
+    return tools;
+  }
+
+  return tools.filter((tool) => {
+    const searchText = `${tool.name} ${tool.path} ${tool.description}`.toLowerCase();
+    return searchText.includes(cleanKeyword);
+  });
+}
+
+/**
+ * 按分类过滤工具
+ */
+export function filterToolsByCategory(tools, category) {
+  if (!category) {
+    return tools;
+  }
+
+  return tools.filter((tool) => tool.category === category);
+}
 
 /**
  * 加载工具库元数据
