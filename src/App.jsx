@@ -93,13 +93,17 @@ import {
   selectAttachments,
   getAttachmentPreview,
   getStoredAccount,
+  getSyncDeviceId,
+  getSyncStatus,
   isAuthRequiredError,
   getTurnstileSiteKey,
   loginAccount,
   logoutAccount,
   openAttachment,
   registerAccount,
+  subscribeSyncStatus,
 } from "./lib/storage.js";
+import { createTombstone } from "./lib/syncModel.js";
 import { ToolsLibraryPanel } from "./components/ToolsLibraryPanel.jsx";
 
 const filterOptions = [
@@ -360,6 +364,7 @@ function App() {
   const [turnstileResetKey, setTurnstileResetKey] = useState(0);
   const [isAuthenticating, setIsAuthenticating] = useState(false);
   const [syncError, setSyncError] = useState("");
+  const [syncStatus, setSyncStatus] = useState(() => getSyncStatus(account?.id));
   const [passwordDraft, setPasswordDraft] = useState({ currentPassword: "", nextPassword: "", confirmPassword: "" });
   const [passwordStatus, setPasswordStatus] = useState({ type: "", message: "" });
   const [isPasswordSaving, setIsPasswordSaving] = useState(false);
@@ -399,6 +404,11 @@ function App() {
   const speechRecognitionRef = useRef(null);
   const dailySlotReminderKeysRef = useRef(new Set());
   const vaultUnlockTimersRef = useRef(new Map());
+
+  useEffect(() => {
+    setSyncStatus(getSyncStatus(account?.id));
+    return subscribeSyncStatus(setSyncStatus);
+  }, [account?.id]);
 
   useEffect(() => {
     const intervalId = window.setInterval(() => setCurrentTime(new Date()), CLOCK_TICK_MS);
@@ -527,6 +537,24 @@ function App() {
       window.clearInterval(intervalId);
     };
   }, [account, isLoaded]);
+
+  async function retryCloudSync() {
+    try {
+      setSyncError("");
+      await saveAppData(data);
+      setSyncStatus(getSyncStatus(account?.id));
+    } catch (error) {
+      console.error(error);
+
+      if (isAuthRequiredError(error)) {
+        setAccount(null);
+        setAuthError(error.message || "请重新登录 Sherlly 账号");
+        return;
+      }
+
+      setSyncError(error.message || "手动同步失败，请稍后重试");
+    }
+  }
 
   useEffect(() => {
     const handleQuickCapture = () => activateQuickCapture("快捷键速记");
@@ -1569,6 +1597,7 @@ function App() {
     setData((current) => ({
       ...current,
       vaultItems: normalizeVaultItems(current.vaultItems).filter((vaultItem) => vaultItem.id !== item.id),
+      tombstones: [...current.tombstones, createTombstone("vaultItems", item.id, getSyncDeviceId(), now)],
       logs: [...current.logs, createLog("删除安全速记", { id: item.id, title: item.title }, "已删除加密速记", now)],
     }));
     lockVaultItem(item.id);
@@ -1888,10 +1917,13 @@ function App() {
   }
 
   function deleteTask(task) {
+    const now = new Date();
+
     setData((current) => ({
       ...current,
       tasks: current.tasks.filter((item) => item.id !== task.id),
-      logs: [...current.logs, createLog("删除任务", task, "从任务列表移除")],
+      tombstones: [...current.tombstones, createTombstone("tasks", task.id, getSyncDeviceId(), now)],
+      logs: [...current.logs, createLog("删除任务", task, "从任务列表移除", now)],
     }));
 
     if (editingId === task.id) {
@@ -2052,20 +2084,25 @@ function App() {
 
   function confirmCandidate(candidate) {
     const task = createTask(candidateToDraft(candidate));
+    const now = new Date();
 
     setData((current) => ({
       ...current,
       tasks: [task, ...current.tasks],
       candidates: current.candidates.filter((item) => item.id !== candidate.id),
-      logs: [...current.logs, createLog("创建任务", task, "候选任务确认入库")],
+      tombstones: [...current.tombstones, createTombstone("candidates", candidate.id, getSyncDeviceId(), now)],
+      logs: [...current.logs, createLog("创建任务", task, "候选任务确认入库", now)],
     }));
   }
 
   function dismissCandidate(candidate) {
+    const now = new Date();
+
     setData((current) => ({
       ...current,
       candidates: current.candidates.filter((item) => item.id !== candidate.id),
-      logs: [...current.logs, createLog("删除任务", { title: candidate.text }, "候选任务忽略")],
+      tombstones: [...current.tombstones, createTombstone("candidates", candidate.id, getSyncDeviceId(), now)],
+      logs: [...current.logs, createLog("删除任务", { title: candidate.text }, "候选任务忽略", now)],
     }));
   }
 
@@ -2243,6 +2280,32 @@ function App() {
       {syncError ? (
         <section className="sync-error-banner" role="alert">
           {syncError}
+        </section>
+      ) : null}
+
+      {cloudSyncEnabled && account ? (
+        <section className={`sync-status-banner is-${syncStatus.status}`} aria-live="polite">
+          <span>
+            {syncStatus.status === "offline-pending"
+              ? "离线待同步"
+              : syncStatus.status === "conflict-resolving"
+                ? "正在合并其他设备的更新"
+                : syncStatus.status === "syncing"
+                  ? "正在同步"
+                  : syncStatus.lastSyncedAt
+                    ? `上次同步：${new Date(syncStatus.lastSyncedAt).toLocaleString("zh-CN")}`
+                    : "等待首次同步"}
+          </span>
+          {syncStatus.message ? <small>{syncStatus.message}</small> : null}
+          <button
+            className="secondary-button"
+            type="button"
+            onClick={retryCloudSync}
+            disabled={syncStatus.status === "syncing" || syncStatus.status === "conflict-resolving"}
+          >
+            <RefreshCw size={15} />
+            手动重试
+          </button>
         </section>
       ) : null}
 
@@ -2442,7 +2505,20 @@ function App() {
               onViewTask={(task) => setDetailTaskId(task.id)}
             />
           ) : activeView === "tools" ? (
-            <ToolsLibraryPanel />
+            <ToolsLibraryPanel
+              tools={data.tools}
+              onToolsChange={(tools) => setData((current) => ({ ...current, tools }))}
+              onDeleteTool={(toolId) =>
+                setData((current) => ({
+                  ...current,
+                  tools: current.tools.filter((tool) => tool.id !== toolId),
+                  tombstones: [
+                    ...current.tombstones,
+                    createTombstone("tools", toolId, getSyncDeviceId()),
+                  ],
+                }))
+              }
+            />
           ) : (
             <ReportPanel
               dailyReport={dailyReport}

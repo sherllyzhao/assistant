@@ -1,8 +1,16 @@
+import { normalizeSyncData } from "../src/lib/syncModel.js";
+
+export { SherllyUserData } from "./userDataStore.js";
+
 const defaultData = {
   tasks: [],
   candidates: [],
   logs: [],
   vaultItems: [],
+  tools: [],
+  habits: [],
+  vaultCandidates: [],
+  tombstones: [],
   settings: {
     soundEnabled: true,
   },
@@ -348,49 +356,35 @@ function jsonInternalResponse(body, status = 200) {
   });
 }
 
-async function loadData(env, userId) {
-  const stored = await env.SHERLLY_DATA.get(getStorageKey(userId));
-
-  if (!stored) {
-    return defaultData;
+function getUserDataStoreStub(env, userId) {
+  if (typeof env.SHERLLY_USER_DATA.getByName === "function") {
+    return env.SHERLLY_USER_DATA.getByName(userId);
   }
 
-  return normalizeData(JSON.parse(stored)?.data);
+  return env.SHERLLY_USER_DATA.get(env.SHERLLY_USER_DATA.idFromName(userId));
 }
 
-async function saveData(env, userId, data) {
-  const storageKey = getStorageKey(userId);
-  const stored = await env.SHERLLY_DATA.get(storageKey);
-  const currentDocument = stored ? JSON.parse(stored) : null;
-  const currentData = currentDocument?.data || defaultData;
-  const normalized = normalizeDataForSave(data, currentData);
-  const now = new Date().toISOString();
+async function loadData(env, userId) {
+  const store = getUserDataStoreStub(env, userId);
+  const current = await store.read();
 
-  if (shouldBackupBeforeSave(currentData, normalized)) {
-    await env.SHERLLY_DATA.put(
-      getBackupStorageKey(userId, now),
-      JSON.stringify({
-        userId,
-        data: normalizeData(currentData),
-        backedUpAt: now,
-        reason: "before-destructive-save",
-      }),
-      {
-        expirationTtl: 60 * 60 * 24 * 30,
-      },
-    );
+  if (current) {
+    return current;
   }
 
-  await env.SHERLLY_DATA.put(
-    storageKey,
-    JSON.stringify({
-      userId,
-      data: normalized,
-      updatedAt: now,
-    }),
-  );
+  const stored = await env.SHERLLY_DATA.get(getStorageKey(userId));
+  const legacyDocument = stored ? JSON.parse(stored) : null;
+  return store.initializeLegacy(normalizeSyncData(legacyDocument?.data || defaultData));
+}
 
-  return normalized;
+async function saveData(env, userId, payload) {
+  const result = await getUserDataStoreStub(env, userId).write(payload);
+
+  if (!result?.ok) {
+    return result;
+  }
+
+  return result.envelope;
 }
 
 export class SherllyAuthStore {
@@ -811,12 +805,17 @@ async function handleRequest(request, env) {
   if (url.pathname === "/ready" && request.method === "GET") {
     const kvReady = Boolean(env.SHERLLY_DATA?.get && env.SHERLLY_DATA?.put);
     const authReady = Boolean(env.SHERLLY_AUTH_STORE?.idFromName && env.SHERLLY_AUTH_STORE?.get);
+    const userDataReady = Boolean(
+      env.SHERLLY_USER_DATA?.getByName ||
+      (env.SHERLLY_USER_DATA?.idFromName && env.SHERLLY_USER_DATA?.get),
+    );
 
     return jsonResponse(request, env, {
-      ok: kvReady && authReady,
-      storage: kvReady ? "kv" : "missing",
+      ok: kvReady && authReady && userDataReady,
+      storage: userDataReady ? "durable_object" : "missing",
+      migrationStorage: kvReady ? "kv" : "missing",
       authStorage: authReady ? "durable_object" : "missing",
-    }, kvReady && authReady ? 200 : 500);
+    }, kvReady && authReady && userDataReady ? 200 : 500);
   }
 
   if (url.pathname !== "/api/data" && !url.pathname.startsWith("/api/auth/")) {
@@ -865,9 +864,13 @@ async function handleRequest(request, env) {
 
   if (request.method === "PUT") {
     const body = await request.json();
-    const data = body?.data || body;
+    const result = await saveData(env, userId, body);
 
-    return jsonResponse(request, env, await saveData(env, userId, data));
+    if (result?.ok === false) {
+      return jsonResponse(request, env, result, result.status || 400);
+    }
+
+    return jsonResponse(request, env, result);
   }
 
   return jsonResponse(request, env, { ok: false, message: "Method not allowed" }, 405);

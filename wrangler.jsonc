@@ -20,6 +20,10 @@
       {
         "name": "SHERLLY_AUTH_STORE",
         "class_name": "SherllyAuthStore"
+      },
+      {
+        "name": "SHERLLY_USER_DATA",
+        "class_name": "SherllyUserData"
       }
     ]
   },
@@ -28,6 +32,12 @@
       "tag": "v1-auth-store",
       "new_sqlite_classes": [
         "SherllyAuthStore"
+      ]
+    },
+    {
+      "tag": "v2-user-data-store",
+      "new_sqlite_classes": [
+        "SherllyUserData"
       ]
     }
   ],

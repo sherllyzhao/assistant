@@ -21,6 +21,8 @@
     "cf:secret:token": "wrangler secret put SHERLLY_API_TOKEN",
     "build": "vite build",
     "preview": "vite preview",
+    "test": "vitest run",
+    "test:sync": "vitest run tests/syncModel.test.js",
     "renderer:config": "node scripts/write-renderer-config.cjs",
     "pack:win": "npm run renderer:config && npm run check && npm run build && electron-builder --win nsis --x64 --publish never",
     "release:win": "npm run renderer:config && npm run check && npm run build && electron-builder --win nsis --x64 --publish always",
@@ -40,10 +42,12 @@
     "react-dom": "^19.0.0"
   },
   "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.18.5",
     "@vitejs/plugin-react": "^4.3.4",
     "electron": "^33.2.1",
     "electron-builder": "^26.8.1",
     "vite": "^5.4.11",
+    "vitest": "^4.1.0",
     "wrangler": "^4.97.0"
   },
   "build": {

@@ -207,6 +207,35 @@ button:disabled {
   line-height: 1.5;
 }
 
+.sync-status-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 16px;
+  padding: 10px 14px;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.42);
+}
+
+.sync-status-banner > span {
+  font-weight: 700;
+}
+
+.sync-status-banner > small {
+  flex: 1;
+  color: var(--muted-text);
+}
+
+.sync-status-banner > button {
+  margin-left: auto;
+}
+
+.sync-status-banner.is-offline-pending {
+  border-color: rgba(245, 158, 11, 0.48);
+  background: rgba(120, 53, 15, 0.2);
+}
+
 .update-banner {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;

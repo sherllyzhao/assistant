@@ -1,9 +1,21 @@
 import { DEFAULT_FTP_CLIENT_PATH } from "./domain.js";
+import {
+  SYNC_SCHEMA_VERSION,
+  mergeSyncData,
+  normalizeSyncData,
+  normalizeSyncEnvelope,
+  stableStringify,
+  validateEmbeddedImageLimits,
+} from "./syncModel.js";
 
 const fallbackStorageKey = "sherlly-assistant:v1";
 const scopedFallbackStoragePrefix = "sherlly-assistant:v1:data";
 const migrationStoragePrefix = "sherlly-assistant:v1:migrated";
 const authStorageKey = "sherlly-assistant:auth:v1";
+const deviceIdStorageKey = "sherlly-assistant:device:v1";
+const syncStateStoragePrefix = "sherlly-assistant:sync:v1";
+const legacyToolsStorageKey = "sherlly_tools_library";
+const syncStatusEventName = "sherlly:sync-status";
 const cloudApiBaseUrl = String(import.meta.env.VITE_SHERLLY_API_URL || "").replace(/\/+$/, "");
 const cloudApiToken = String(import.meta.env.VITE_SHERLLY_API_TOKEN || "").trim();
 const turnstileSiteKey = String(import.meta.env.VITE_TURNSTILE_SITE_KEY || "").trim();
@@ -13,6 +25,10 @@ export const initialData = {
   candidates: [],
   logs: [],
   vaultItems: [],
+  tools: [],
+  habits: [],
+  vaultCandidates: [],
+  tombstones: [],
   settings: {
     soundEnabled: true,
     ftpClientPath: DEFAULT_FTP_CLIENT_PATH,
@@ -20,16 +36,7 @@ export const initialData = {
 };
 
 function normalizeData(data) {
-  return {
-    tasks: Array.isArray(data?.tasks) ? data.tasks : [],
-    candidates: Array.isArray(data?.candidates) ? data.candidates : [],
-    logs: Array.isArray(data?.logs) ? data.logs : [],
-    vaultItems: Array.isArray(data?.vaultItems) ? data.vaultItems : [],
-    settings: {
-      ...initialData.settings,
-      ...(data?.settings && typeof data.settings === "object" ? data.settings : {}),
-    },
-  };
+  return normalizeSyncData(data, initialData);
 }
 
 function readStorageJson(key) {
@@ -61,6 +68,61 @@ function getScopedFallbackStorageKey(scope) {
 
 function getMigrationStorageKey(scope) {
   return `${migrationStoragePrefix}:${normalizeStorageScope(scope)}`;
+}
+
+function getSyncStateStorageKey(scope) {
+  return `${syncStateStoragePrefix}:${normalizeStorageScope(scope)}`;
+}
+
+function getDeviceId() {
+  const stored = String(window.localStorage.getItem(deviceIdStorageKey) || "").trim();
+
+  if (stored) {
+    return stored;
+  }
+
+  const deviceId = typeof crypto.randomUUID === "function"
+    ? crypto.randomUUID()
+    : `device-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  window.localStorage.setItem(deviceIdStorageKey, deviceId);
+  return deviceId;
+}
+
+export function getSyncDeviceId() {
+  return getDeviceId();
+}
+
+function getSyncState(scope = getCurrentStorageScope()) {
+  const stored = readStorageJson(getSyncStateStorageKey(scope));
+
+  return {
+    revision: Math.max(0, Number.parseInt(stored?.revision || 0, 10)),
+    checksum: String(stored?.checksum || ""),
+    updatedAt: String(stored?.updatedAt || ""),
+    lastSyncedAt: String(stored?.lastSyncedAt || ""),
+    status: String(stored?.status || "idle"),
+    message: String(stored?.message || ""),
+  };
+}
+
+function updateSyncState(scope, patch) {
+  const nextState = {
+    ...getSyncState(scope),
+    ...patch,
+  };
+  writeStorageJson(getSyncStateStorageKey(scope), nextState);
+  window.dispatchEvent(new CustomEvent(syncStatusEventName, { detail: nextState }));
+  return nextState;
+}
+
+export function getSyncStatus(scope = getCurrentStorageScope()) {
+  return getSyncState(scope);
+}
+
+export function subscribeSyncStatus(listener) {
+  const handleStatus = (event) => listener(event.detail);
+  window.addEventListener(syncStatusEventName, handleStatus);
+  return () => window.removeEventListener(syncStatusEventName, handleStatus);
 }
 
 function normalizeAccount(user) {
@@ -169,74 +231,50 @@ function markMigrationComplete(scope) {
 }
 
 async function loadLocalDataForMigration(scope) {
-  if (hasCompletedMigration(scope)) {
-    return initialData;
-  }
-
   const fallbackData = getFallbackData(scope);
 
-  if (!window.sherlly?.loadData) {
+  if (hasCompletedMigration(scope)) {
     return fallbackData;
+  }
+
+  const legacyTools = readStorageJson(legacyToolsStorageKey);
+  const migrationData = mergeData(fallbackData, {
+    ...initialData,
+    tools: Array.isArray(legacyTools) ? legacyTools : [],
+  });
+
+  if (!window.sherlly?.loadData) {
+    return migrationData;
   }
 
   try {
-    return mergeData(fallbackData, await window.sherlly.loadData());
+    return mergeData(migrationData, await window.sherlly.loadData());
   } catch (error) {
     console.error(error);
-    return fallbackData;
+    return migrationData;
   }
 }
 
 function hasMeaningfulData(data) {
-  return data.tasks.length > 0 || data.candidates.length > 0 || data.logs.length > 0 || data.vaultItems.length > 0;
-}
-
-function getItemTimestamp(item) {
-  return new Date(item?.updatedAt || item?.createdAt || item?.detectedAt || item?.createdAt || 0).getTime();
-}
-
-function mergeItems(cloudItems, localItems) {
-  const itemsById = new Map();
-
-  for (const item of cloudItems) {
-    if (item?.id) {
-      itemsById.set(item.id, item);
-    }
-  }
-
-  for (const item of localItems) {
-    if (!item?.id) {
-      continue;
-    }
-
-    const existing = itemsById.get(item.id);
-
-    if (!existing || getItemTimestamp(item) >= getItemTimestamp(existing)) {
-      itemsById.set(item.id, item);
-    }
-  }
-
-  return [...itemsById.values()];
+  const normalized = normalizeData(data);
+  return [
+    "tasks",
+    "candidates",
+    "logs",
+    "vaultItems",
+    "tools",
+    "habits",
+    "vaultCandidates",
+    "tombstones",
+  ].some((collection) => normalized[collection].length > 0);
 }
 
 export function mergeData(cloudData, localData) {
-  const cloud = normalizeData(cloudData);
-  const local = normalizeData(localData);
-
-  return {
-    tasks: mergeItems(cloud.tasks, local.tasks),
-    candidates: mergeItems(cloud.candidates, local.candidates),
-    logs: mergeItems(cloud.logs, local.logs),
-    vaultItems: mergeItems(cloud.vaultItems, local.vaultItems),
-    settings: {
-      ...cloud.settings,
-      ...local.settings,
-    },
-  };
+  return mergeSyncData(cloudData, localData);
 }
 
 export function isSameData(left, right) {
-  return JSON.stringify(normalizeData(left)) === JSON.stringify(normalizeData(right));
+  return stableStringify(normalizeData(left)) === stableStringify(normalizeData(right));
 }
 
 function createAuthRequiredError(message = "请先登录 Sherlly 账号") {
@@ -262,6 +300,8 @@ async function parseCloudResponse(response, fallbackMessage) {
   if (!response.ok) {
     const error = new Error(body?.message || `${fallbackMessage}：${response.status}`);
     error.status = response.status;
+    error.code = body?.code || "";
+    error.body = body;
 
     if (response.status === 401) {
       error.code = "AUTH_REQUIRED";
@@ -282,17 +322,57 @@ async function requestCloud(path, options = {}) {
   return parseCloudResponse(response, options.fallbackMessage || "云端请求失败");
 }
 
-async function loadCloudData() {
-  return normalizeData(await requestCloud("/api/data", { fallbackMessage: "云端读取失败" }));
+async function loadCloudEnvelope() {
+  return normalizeSyncEnvelope(await requestCloud("/api/data", { fallbackMessage: "云端读取失败" }));
 }
 
-async function saveCloudData(data) {
-  return normalizeData(await requestCloud("/api/data", {
+async function putCloudData(scope, data, baseRevision) {
+  const envelope = normalizeSyncEnvelope(await requestCloud("/api/data", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(normalizeData(data)),
+    body: JSON.stringify({
+      schemaVersion: SYNC_SCHEMA_VERSION,
+      baseRevision,
+      deviceId: getDeviceId(),
+      data: normalizeData(data),
+    }),
     fallbackMessage: "云端保存失败",
   }));
+  updateSyncState(scope, {
+    revision: envelope.revision,
+    checksum: envelope.checksum,
+    updatedAt: envelope.updatedAt,
+    lastSyncedAt: new Date().toISOString(),
+    status: "synced",
+    message: "",
+  });
+  clearFallbackData(scope);
+  return envelope;
+}
+
+async function saveCloudData(scope, data) {
+  const normalized = normalizeData(data);
+  const syncState = getSyncState(scope);
+  updateSyncState(scope, { status: "syncing", message: "" });
+
+  try {
+    return await putCloudData(scope, normalized, syncState.revision);
+  } catch (error) {
+    if (error.status !== 409 || !error.body?.envelope) {
+      throw error;
+    }
+
+    const currentEnvelope = normalizeSyncEnvelope(error.body.envelope);
+    const merged = mergeData(currentEnvelope.data, normalized);
+    updateSyncState(scope, {
+      revision: currentEnvelope.revision,
+      checksum: currentEnvelope.checksum,
+      updatedAt: currentEnvelope.updatedAt,
+      status: "conflict-resolving",
+      message: "检测到其他设备更新，正在自动合并",
+    });
+    return putCloudData(scope, merged, currentEnvelope.revision);
+  }
 }
 
 function getCloudHeaders(headers = {}, authToken = getStoredAuth()?.token) {
@@ -403,19 +483,28 @@ export async function loadAppData() {
     }
 
     try {
-      const cloudData = await loadCloudData();
+      const cloudEnvelope = await loadCloudEnvelope();
+      updateSyncState(auth.user.id, {
+        revision: cloudEnvelope.revision,
+        checksum: cloudEnvelope.checksum,
+        updatedAt: cloudEnvelope.updatedAt,
+        lastSyncedAt: new Date().toISOString(),
+        status: "synced",
+        message: "",
+      });
       const localData = await loadLocalDataForMigration(auth.user.id);
 
       if (hasMeaningfulData(localData)) {
-        const mergedData = mergeData(cloudData, localData);
-        await saveCloudData(mergedData);
+        const mergedData = mergeData(cloudEnvelope.data, localData);
+        const savedEnvelope = await saveCloudData(auth.user.id, mergedData);
         clearFallbackData(auth.user.id);
+        window.localStorage.removeItem(legacyToolsStorageKey);
         markMigrationComplete(auth.user.id);
-        return mergedData;
+        return savedEnvelope.data;
       }
 
       markMigrationComplete(auth.user.id);
-      return cloudData;
+      return cloudEnvelope.data;
     } catch (error) {
       console.error(error);
 
@@ -427,6 +516,10 @@ export async function loadAppData() {
       const fallbackData = getFallbackData(auth.user.id);
 
       if (hasMeaningfulData(fallbackData)) {
+        updateSyncState(auth.user.id, {
+          status: "offline-pending",
+          message: "云端不可用，本地数据等待同步",
+        });
         return fallbackData;
       }
 
@@ -443,6 +536,14 @@ export async function loadAppData() {
 
 export async function saveAppData(data) {
   const normalized = normalizeData(data);
+  const imageValidation = validateEmbeddedImageLimits(normalized);
+
+  if (!imageValidation.ok) {
+    const error = new Error(imageValidation.message);
+    error.code = imageValidation.code;
+    error.status = 413;
+    throw error;
+  }
 
   if (cloudApiBaseUrl) {
     const auth = getStoredAuth();
@@ -452,7 +553,8 @@ export async function saveAppData(data) {
     }
 
     try {
-      return await saveCloudData(normalized);
+      const envelope = await saveCloudData(auth.user.id, normalized);
+      return envelope.data;
     } catch (error) {
       console.error(error);
 
@@ -462,6 +564,10 @@ export async function saveAppData(data) {
       }
 
       saveFallbackData(auth.user.id, normalized);
+      updateSyncState(auth.user.id, {
+        status: "offline-pending",
+        message: error.message || "云端保存失败，本地数据等待同步",
+      });
       return normalized;
     }
   }

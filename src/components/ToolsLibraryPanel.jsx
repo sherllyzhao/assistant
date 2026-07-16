@@ -1,23 +1,18 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { ExternalLink, Download, FileText, FolderOpen, Plus, Search, Trash2, Copy, Edit2 } from "lucide-react";
 import { getToolsLibraryLinks, getToolsLibraryCommands, openToolsLibrary } from "../lib/toolsLibrary.js";
-import { loadToolsData, saveToolsData, searchTools, filterToolsByCategory } from "../lib/toolsLibrary.js";
+import { searchTools, filterToolsByCategory } from "../lib/toolsLibrary.js";
 import { toolCategories, emptyToolDraft, createTool, getToolCategoryMeta } from "../lib/domain.js";
 
-export function ToolsLibraryPanel() {
+export function ToolsLibraryPanel({ tools = [], onDeleteTool, onToolsChange }) {
   const links = getToolsLibraryLinks();
   const commands = getToolsLibraryCommands();
 
-  const [tools, setTools] = useState([]);
   const [draft, setDraft] = useState({ ...emptyToolDraft });
   const [editingId, setEditingId] = useState("");
   const [searchKeyword, setSearchKeyword] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("");
   const [showForm, setShowForm] = useState(false);
-
-  useEffect(() => {
-    setTools(loadToolsData());
-  }, []);
 
   const filteredTools = filterToolsByCategory(searchTools(tools, searchKeyword), categoryFilter);
 
@@ -38,14 +33,17 @@ export function ToolsLibraryPanel() {
 
       if (editingId) {
         const tool = createTool(draft);
-        newTools = tools.map((t) => (t.id === editingId ? { ...tool, id: editingId } : t));
+        newTools = tools.map((currentTool) =>
+          currentTool.id === editingId
+            ? { ...tool, id: editingId, createdAt: currentTool.createdAt || tool.createdAt }
+            : currentTool,
+        );
       } else {
         const tool = createTool(draft);
         newTools = [...tools, tool];
       }
 
-      saveToolsData(newTools);
-      setTools(newTools);
+      onToolsChange(newTools);
       resetDraft();
       setShowForm(false);
     } catch (error) {
@@ -55,9 +53,7 @@ export function ToolsLibraryPanel() {
 
   function deleteTool(id) {
     if (confirm("确定要删除这个工具吗？")) {
-      const newTools = tools.filter((t) => t.id !== id);
-      saveToolsData(newTools);
-      setTools(newTools);
+      onDeleteTool(id);
     }
   }
 
