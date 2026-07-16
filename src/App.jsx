@@ -677,6 +677,11 @@ function App() {
   }, []);
 
   useEffect(() => {
+    setDetailTaskId("");
+    setAttachmentPreview(null);
+  }, [activeView]);
+
+  useEffect(() => {
     const activeAlertIds = new Set(reminderAlerts.map((alert) => alert.id));
 
     for (const [alertId, timerId] of reminderAlertTimersRef.current.entries()) {
