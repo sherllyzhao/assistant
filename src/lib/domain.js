@@ -159,6 +159,10 @@ export const emptyTaskDraft = {
   dailySlotValues: [],
   priority: "normal",
   status: "todo",
+  waitingFor: "",
+  followUpAt: "",
+  followUpNote: "",
+  followUpDraft: "",
   tags: "",
   note: "",
   launchAction: emptyLaunchAction,
@@ -794,6 +798,23 @@ export function normalizeReminderWindow(startAt, endAt) {
   };
 }
 
+export function normalizeFollowUpAt(value) {
+  const time = value ? getFiniteTime(value) : NaN;
+  return Number.isFinite(time) ? new Date(time).toISOString() : "";
+}
+
+export function normalizeWaitingFor(value) {
+  return String(value || "").trim().slice(0, 120);
+}
+
+export function normalizeFollowUpNote(value) {
+  return String(value || "").trim().slice(0, 1000);
+}
+
+export function normalizeFollowUpDraft(value) {
+  return String(value || "").trim().slice(0, 2000);
+}
+
 export function getSlotMeta(value) {
   return dailySlots.find((slot) => slot.value === value) || dailySlots[0];
 }
@@ -889,6 +910,11 @@ export function createTask(draft, now = new Date()) {
     dailySlotReminderRecords: [],
     priority: smartDraft.priority || "normal",
     status: smartDraft.status || "todo",
+    waitingFor: normalizeWaitingFor(smartDraft.waitingFor),
+    followUpAt: normalizeFollowUpAt(smartDraft.followUpAt),
+    followUpNote: normalizeFollowUpNote(smartDraft.followUpNote),
+    followUpDraft: normalizeFollowUpDraft(smartDraft.followUpDraft),
+    lastFollowUpRemindedAt: "",
     completedAt: smartDraft.status === "done" ? createdAt : "",
     tags: normalizeTags(smartDraft.tags),
     note: String(smartDraft.note || "").trim(),
@@ -936,6 +962,44 @@ export function createLog(action, task, detail = "", now = new Date()) {
     detail,
     createdAt: now.toISOString(),
   };
+}
+
+export function createFollowUpDraft(task) {
+  const title = String(task?.title || "这件事").trim();
+  const waitingFor = normalizeWaitingFor(task?.waitingFor);
+  const note = normalizeFollowUpNote(task?.followUpNote);
+  const greeting = waitingFor ? `${waitingFor}，` : "您好，";
+  const context = note ? `（${note}）` : "";
+
+  return normalizeFollowUpDraft(
+    `${greeting}想跟进一下关于「${title}」的进展${context}。方便时请告知最新状态和预计完成时间，谢谢。`,
+  );
+}
+
+export function isFollowUpDue(task, now = new Date()) {
+  if (!task || task.status !== "waiting") {
+    return false;
+  }
+
+  const followUpTime = getFiniteTime(task.followUpAt);
+  return Number.isFinite(followUpTime) && followUpTime <= now.getTime();
+}
+
+export function shouldRemindFollowUp(task, now = new Date()) {
+  if (!isFollowUpDue(task, now)) {
+    return false;
+  }
+
+  const followUpTime = getFiniteTime(task.followUpAt);
+  const lastRemindedTime = getFiniteTime(task.lastFollowUpRemindedAt);
+  return !Number.isFinite(lastRemindedTime) || lastRemindedTime < followUpTime;
+}
+
+export function createFollowUpLog(task, draft, now = new Date()) {
+  const cleanDraft = normalizeFollowUpDraft(draft) || createFollowUpDraft(task);
+  const waitingFor = normalizeWaitingFor(task?.waitingFor);
+  const detail = `已确认跟进${waitingFor ? `对象：${waitingFor}；` : "；"}催办草稿已保存（${cleanDraft.length}字）`;
+  return createLog("跟进任务", task, detail, now);
 }
 
 export function getPriorityMeta(priority) {

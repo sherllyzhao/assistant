@@ -12,6 +12,8 @@
   --danger: #c94738;
   --danger-soft: #f8e2dd;
   --warning: #9b6a12;
+  --warning-soft: #fff5d6;
+  --warning-ink: #7b5100;
   --success: #287a45;
   --shadow: 0 18px 40px rgba(25, 45, 38, 0.08);
   font-family:
@@ -3439,4 +3441,77 @@ textarea:focus {
   white-space: pre;
   overflow-x: auto;
   line-height: 1.5;
+}
+
+/* V4.1 主动跟进 */
+.follow-up-fieldset {
+  display: grid;
+  gap: 9px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.follow-up-fieldset legend {
+  padding: 0;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.follow-up-fieldset p,
+.task-follow-up-card > p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.task-follow-up-card {
+  display: grid;
+  gap: 12px;
+  margin: 18px 0;
+  padding: 15px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: rgba(242, 247, 243, 0.8);
+}
+
+.task-follow-up-card.is-due {
+  border-color: var(--warning);
+  background: var(--warning-soft);
+}
+
+.task-follow-up-heading,
+.task-detail-follow-up-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.task-follow-up-heading > div {
+  display: grid;
+  gap: 4px;
+}
+
+.task-follow-up-heading span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.task-follow-up-heading em {
+  padding: 4px 8px;
+  border-radius: 999px;
+  color: var(--warning-ink, #8a5a00);
+  background: rgba(255, 210, 102, 0.28);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 800;
+}
+
+.is-follow-up-due {
+  color: var(--warning-ink, #8a5a00) !important;
+  font-weight: 800;
 }

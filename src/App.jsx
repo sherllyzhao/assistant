@@ -45,6 +45,8 @@ import {
   detectVaultCandidatesFromText,
   createDailyReport,
   createAttachment,
+  createFollowUpDraft,
+  createFollowUpLog,
   createTaskOrganizingSuggestions,
   createVaultPlaintext,
   createWorkMemoryLibrary,
@@ -62,12 +64,18 @@ import {
   getTaskReminderAt,
   getTaskReminderWindow,
   isActiveTask,
+  isFollowUpDue,
+  shouldRemindFollowUp,
   isOverdue,
   launchActionTypes,
   logRanges,
   maskSecretValue,
   normalizeLaunchAction,
   normalizeAttachments,
+  normalizeFollowUpAt,
+  normalizeFollowUpDraft,
+  normalizeFollowUpNote,
+  normalizeWaitingFor,
   normalizeDailySlotReminderRecords,
   normalizeDailyTarget,
   normalizeDailySlots,
@@ -327,6 +335,10 @@ function taskToDraft(task) {
     launchAction: normalizeLaunchAction(task.launchAction),
     priority: task.priority || "normal",
     status: task.status || "todo",
+    waitingFor: task.waitingFor || "",
+    followUpAt: toDateTimeInputValue(task.followUpAt),
+    followUpNote: task.followUpNote || "",
+    followUpDraft: task.followUpDraft || "",
     tags: tags.join(" "),
     note: task.note || "",
     attachments: normalizeAttachments(task.attachments),
@@ -658,6 +670,7 @@ function App() {
     const checkReminders = () => {
       const now = new Date();
       const remindedTaskIds = [];
+      const remindedFollowUpTaskIds = [];
       const remindedCandidateIds = [];
       const dailySlotRemindersByTaskId = new Map();
 
@@ -669,6 +682,17 @@ function App() {
             id: `task_${task.id}_${now.getTime()}`,
             title: `${getPriorityMeta(task.priority).label}提醒`,
             body: `${task.title} · ${reminderWindowLabel || formatDateTime(task.dueAt)}`,
+            sound: data.settings.soundEnabled,
+            flash: true,
+          });
+        }
+
+        if (shouldRemindFollowUp(task, now)) {
+          remindedFollowUpTaskIds.push(task.id);
+          notifyWithFallback({
+            id: `follow_up_${task.id}_${now.getTime()}`,
+            title: "该跟进了",
+            body: `${task.title}${task.waitingFor ? ` · 等待${task.waitingFor}` : ""} · 可生成催办草稿`,
             sound: data.settings.soundEnabled,
             flash: true,
           });
@@ -713,7 +737,7 @@ function App() {
         }
       }
 
-      if (remindedTaskIds.length === 0 && remindedCandidateIds.length === 0 && dailySlotRemindersByTaskId.size === 0) {
+      if (remindedTaskIds.length === 0 && remindedFollowUpTaskIds.length === 0 && remindedCandidateIds.length === 0 && dailySlotRemindersByTaskId.size === 0) {
         return;
       }
 
@@ -724,13 +748,16 @@ function App() {
           const taskWithDueReminder = remindedTaskIds.includes(task.id)
             ? { ...task, lastRemindedAt: now.toISOString() }
             : task;
+          const taskWithFollowUpReminder = remindedFollowUpTaskIds.includes(task.id)
+            ? { ...taskWithDueReminder, lastFollowUpRemindedAt: now.toISOString() }
+            : taskWithDueReminder;
 
           if (!dailySlotReminder) {
-            return taskWithDueReminder;
+            return taskWithFollowUpReminder;
           }
 
           return {
-            ...taskWithDueReminder,
+            ...taskWithFollowUpReminder,
             dailySlotReminderRecords: normalizeDailySlotReminderRecords([
               ...(Array.isArray(taskWithDueReminder.dailySlotReminderRecords)
                 ? taskWithDueReminder.dailySlotReminderRecords
@@ -894,7 +921,7 @@ function App() {
         const attachmentText = normalizeAttachments(task.attachments)
           .map((attachment) => attachment.name)
           .join(" ");
-        const searchable = [task.title, task.source, task.owner, task.note, task.tags.join(" "), attachmentText]
+        const searchable = [task.title, task.source, task.owner, task.waitingFor, task.followUpNote, task.note, task.tags.join(" "), attachmentText]
           .join(" ")
           .toLowerCase();
         return searchable.includes(query);
@@ -1864,6 +1891,13 @@ function App() {
             launchAction: normalizeLaunchAction(draft.launchAction),
             priority: draft.priority,
             status: draft.status,
+            waitingFor: normalizeWaitingFor(draft.waitingFor),
+            followUpAt: normalizeFollowUpAt(draft.followUpAt),
+            followUpNote: normalizeFollowUpNote(draft.followUpNote),
+            followUpDraft: normalizeFollowUpDraft(draft.followUpDraft),
+            lastFollowUpRemindedAt: draft.status !== "waiting" || draft.followUpAt !== toDateTimeInputValue(task.followUpAt)
+              ? ""
+              : task.lastFollowUpRemindedAt || "",
             tags: draft.tags
               .split(/[,，\s]+/)
               .map((tag) => tag.trim())
@@ -1926,6 +1960,45 @@ function App() {
       tasks: current.tasks.map((item) => (item.id === task.id ? updatedTask : item)),
       logs: [...current.logs, createLog(action, updatedTask, `状态变更为${getStatusMeta(status).label}`, now)],
     }));
+  }
+
+  function generateTaskFollowUpDraft(task) {
+    const generatedDraft = createFollowUpDraft(task);
+    const now = new Date();
+
+    setData((current) => ({
+      ...current,
+      tasks: current.tasks.map((item) =>
+        item.id === task.id
+          ? { ...item, followUpDraft: generatedDraft, updatedAt: now.toISOString() }
+          : item,
+      ),
+    }));
+
+    return generatedDraft;
+  }
+
+  function confirmTaskFollowUp(task, draftText) {
+    const now = new Date();
+    const cleanDraft = normalizeFollowUpDraft(draftText) || createFollowUpDraft(task);
+    const updatedTask = {
+      ...task,
+      followUpDraft: cleanDraft,
+      lastFollowUpRemindedAt: now.toISOString(),
+      updatedAt: now.toISOString(),
+    };
+
+    setData((current) => ({
+      ...current,
+      tasks: current.tasks.map((item) => (item.id === task.id ? updatedTask : item)),
+      logs: [...current.logs, createFollowUpLog(updatedTask, cleanDraft, now)],
+    }));
+    notifyWithFallback({
+      title: "跟进已记录",
+      body: `${task.title}${task.waitingFor ? ` · ${task.waitingFor}` : ""}`,
+      sound: false,
+      flash: false,
+    });
   }
 
   async function startTask(task) {
@@ -2876,6 +2949,59 @@ function App() {
                 </label>
               </div>
 
+              <fieldset className="follow-up-fieldset">
+                <legend>等待跟进（可选）</legend>
+                <div className="form-grid">
+                  <label>
+                    等待对象
+                    <input
+                      value={draft.waitingFor}
+                      onChange={(event) => updateDraft("waitingFor", event.target.value)}
+                      placeholder="例如：王总 / 客户 / 同事"
+                    />
+                  </label>
+                  <label>
+                    下次跟进时间
+                    <input
+                      type="datetime-local"
+                      value={draft.followUpAt}
+                      onChange={(event) => updateDraft("followUpAt", event.target.value)}
+                    />
+                  </label>
+                </div>
+                <label>
+                  跟进上下文
+                  <input
+                    value={draft.followUpNote}
+                    onChange={(event) => updateDraft("followUpNote", event.target.value)}
+                    placeholder="例如：确认合同盖章进度"
+                  />
+                </label>
+                <label>
+                  催办草稿
+                  <textarea
+                    value={draft.followUpDraft}
+                    onChange={(event) => updateDraft("followUpDraft", event.target.value)}
+                    rows={3}
+                    placeholder="保存后可在任务详情中生成或编辑"
+                  />
+                </label>
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={() => updateDraft("followUpDraft", createFollowUpDraft({
+                    title: draft.title,
+                    waitingFor: draft.waitingFor,
+                    followUpNote: draft.followUpNote,
+                  }))}
+                  disabled={!draft.title.trim()}
+                >
+                  <MessageSquareText size={17} />
+                  生成催办草稿
+                </button>
+                <p>系统只提醒并生成草稿，不会自动发送消息。</p>
+              </fieldset>
+
               <label>
                 标签
                 <input
@@ -3029,6 +3155,8 @@ function App() {
             copyTask(task);
           }}
           onAddToCalendar={downloadTaskCalendar}
+          onGenerateFollowUpDraft={generateTaskFollowUpDraft}
+          onConfirmFollowUp={confirmTaskFollowUp}
           onPreviewAttachment={previewAttachment}
           now={currentTime}
         />
@@ -4610,7 +4738,13 @@ function ReportTaskItem({ task, onPreviewAttachment, onViewTask }) {
   );
 }
 
-function TaskDetailDialog({ task, now, onAddToCalendar, onClose, onCopy, onEdit, onPreviewAttachment }) {
+function TaskDetailDialog({ task, now, onAddToCalendar, onClose, onCopy, onEdit, onGenerateFollowUpDraft, onConfirmFollowUp, onPreviewAttachment }) {
+  const [followUpDraft, setFollowUpDraft] = useState(task.followUpDraft || "");
+
+  useEffect(() => {
+    setFollowUpDraft(task.followUpDraft || "");
+  }, [task.id, task.followUpDraft]);
+
   const attachments = normalizeAttachments(task.attachments);
   const priority = getPriorityMeta(task.priority);
   const status = getStatusMeta(task.status);
@@ -4618,6 +4752,7 @@ function TaskDetailDialog({ task, now, onAddToCalendar, onClose, onCopy, onEdit,
   const tags = Array.isArray(task.tags) ? task.tags : [];
   const reminderAt = getTaskReminderAt(task);
   const reminderWindowLabel = formatReminderWindow(task);
+  const followUpDue = isFollowUpDue(task, now);
   const launchActionValue = normalizeLaunchAction(task.launchAction);
   const launchActionMeta = launchActionTypes.find((item) => item.value === launchActionValue.type);
 
@@ -4670,6 +4805,47 @@ function TaskDetailDialog({ task, now, onAddToCalendar, onClose, onCopy, onEdit,
             </span>
           ) : null}
         </div>
+
+        {task.status === "waiting" ? (
+          <section className={`task-follow-up-card ${followUpDue ? "is-due" : ""}`}>
+            <div className="task-follow-up-heading">
+              <div>
+                <strong>主动跟进</strong>
+                <span>
+                  {task.waitingFor ? `等待：${task.waitingFor}` : "尚未填写等待对象"}
+                  {task.followUpAt ? ` · 下次跟进：${formatDateTime(task.followUpAt)}` : " · 未设置跟进时间"}
+                </span>
+              </div>
+              {followUpDue ? <em>该跟进了</em> : null}
+            </div>
+            <textarea
+              value={followUpDraft}
+              onChange={(event) => setFollowUpDraft(event.target.value)}
+              rows={4}
+              placeholder="生成一段可复制、可编辑的催办消息"
+            />
+            <div className="task-detail-follow-up-actions">
+              <button
+                className="secondary-button"
+                type="button"
+                onClick={() => setFollowUpDraft(onGenerateFollowUpDraft(task))}
+              >
+                <MessageSquareText size={17} />
+                生成草稿
+              </button>
+              <button
+                className="primary-button"
+                type="button"
+                onClick={() => onConfirmFollowUp(task, followUpDraft)}
+                disabled={!followUpDraft.trim() && !task.title.trim()}
+              >
+                <CheckCircle2 size={17} />
+                已跟进并记录
+              </button>
+            </div>
+            <p>仅记录跟进和保存草稿，不会自动发送消息。</p>
+          </section>
+        ) : null}
 
         {dailyProgress.isScheduled ? (
           <>
@@ -4879,6 +5055,13 @@ function TaskRow({
             </span>
           ) : null}
           {task.owner ? <span>{task.owner}</span> : null}
+          {task.status === "waiting" && task.waitingFor ? <span>等待：{task.waitingFor}</span> : null}
+          {task.status === "waiting" && task.followUpAt ? (
+            <span className={isFollowUpDue(task, now) ? "is-follow-up-due" : ""}>
+              <MessageSquareText size={14} />
+              跟进：{formatDateTime(task.followUpAt)}
+            </span>
+          ) : null}
         </div>
         {isScheduledTask ? (
           <>
