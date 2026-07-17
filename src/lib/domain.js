@@ -12,6 +12,32 @@ export const priorities = [
   { value: "low", label: "低优先级", reminderMinutes: 60 },
 ];
 
+export const workDomains = [
+  { value: "customer", label: "客户" },
+  { value: "project", label: "项目" },
+  { value: "purchasing", label: "采购" },
+  { value: "finance", label: "财务" },
+  { value: "administration", label: "行政" },
+  { value: "other", label: "其他" },
+];
+
+export function normalizeWorkDomain(value) {
+  return workDomains.some((domain) => domain.value === value) ? value : "other";
+}
+
+export function inferWorkDomain(value) {
+  const text = String(value || "").toLowerCase();
+  const rules = [
+    ["finance", /(发票|付款|报销|预算|财务|invoice|payment)/i],
+    ["purchasing", /(采购|供应商|报价|合同|采购单)/i],
+    ["customer", /(客户|甲方|王总|联系人|跟进客户)/i],
+    ["administration", /(行政|会议室|办公|人事|请假|考勤)/i],
+    ["project", /(项目|上线|发布|迭代|开发|测试|交付)/i],
+  ];
+
+  return rules.find(([, pattern]) => pattern.test(text))?.[0] || "other";
+}
+
 export const logRanges = [
   { value: "today", label: "今日日志" },
   { value: "week", label: "本周日志" },
@@ -125,6 +151,7 @@ export const emptyTaskDraft = {
   title: "",
   source: "手动录入",
   owner: "",
+  workDomain: "",
   dueAt: "",
   reminderStartAt: "",
   reminderEndAt: "",
@@ -848,6 +875,9 @@ export function createTask(draft, now = new Date()) {
     title,
     source: String(smartDraft.source || "手动录入").trim(),
     owner: String(smartDraft.owner || "").trim(),
+    workDomain: workDomains.some((domain) => domain.value === smartDraft.workDomain)
+      ? smartDraft.workDomain
+      : inferWorkDomain(`${title} ${smartDraft.note || ""}`),
     createdAt,
     updatedAt: createdAt,
     dueAt: smartDraft.dueAt ? new Date(smartDraft.dueAt).toISOString() : "",
@@ -876,6 +906,25 @@ export function createCandidate(text, source = "微信粘贴", now = new Date())
     detectedAt: now.toISOString(),
     remindedAt: "",
   };
+}
+
+export function detectVaultCandidatesFromText(value, source = "文本粘贴", now = new Date()) {
+  const lines = String(value || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const sensitivePattern = /(密码|口令|密钥|token|secret|api[_ -]?key|private[_ -]?key)/i;
+
+  return lines
+    .filter((line) => sensitivePattern.test(line))
+    .slice(0, 5)
+    .map((line) => ({
+      id: createId("vault-candidate"),
+      title: line.split(/[：:]/)[0].slice(0, 40) || "疑似敏感信息",
+      hint: "检测到疑似敏感内容，原文未保存",
+      source,
+      detectedAt: now.toISOString(),
+    }));
 }
 
 export function createLog(action, task, detail = "", now = new Date()) {

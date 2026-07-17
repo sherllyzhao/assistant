@@ -19,6 +19,7 @@ const PASSWORD_HASH_ITERATIONS = 100000;
 const PASSWORD_HASH_KEY_LENGTH = 32;
 const SESSION_TTL_DAYS = 30;
 const textEncoder = new TextEncoder();
+const requestBuckets = new Map();
 
 function normalizeData(data) {
   return {
@@ -151,7 +152,8 @@ function randomBase64Url(byteLength) {
 }
 
 async function sha256Base64Url(value) {
-  const digest = await crypto.subtle.digest("SHA-256", textEncoder.encode(String(value)));
+  const bytes = value instanceof Uint8Array ? value : textEncoder.encode(String(value));
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
   return bytesToBase64Url(new Uint8Array(digest));
 }
 
@@ -329,6 +331,41 @@ async function verifyTurnstileToken(request, env, body) {
   if (!response.ok || !result?.success) {
     throw createHttpError(400, "人类验证失败，请重试");
   }
+
+  const expectedHostname = String(env.TURNSTILE_EXPECTED_HOSTNAME || "").trim();
+
+  if (expectedHostname && result.hostname !== expectedHostname) {
+    throw createHttpError(400, "人类验证来源不匹配，请重试");
+  }
+}
+
+function enforceRateLimit(request, url) {
+  const now = Date.now();
+  const windowMs = 60 * 1000;
+  const ip = getClientIp(request) || "anonymous";
+  const isAuthRoute = url.pathname.startsWith("/api/auth/");
+  const limit = isAuthRoute ? 12 : 120;
+  const key = `${ip}:${isAuthRoute ? "auth" : url.pathname}`;
+  const current = requestBuckets.get(key);
+
+  if (!current || now - current.startedAt >= windowMs) {
+    requestBuckets.set(key, { startedAt: now, count: 1 });
+    return;
+  }
+
+  current.count += 1;
+
+  if (current.count > limit) {
+    throw createHttpError(429, "请求过于频繁，请稍后再试");
+  }
+
+  if (requestBuckets.size > 2000) {
+    for (const [bucketKey, bucket] of requestBuckets) {
+      if (now - bucket.startedAt >= windowMs) {
+        requestBuckets.delete(bucketKey);
+      }
+    }
+  }
 }
 
 function getStorageKey(userId) {
@@ -337,6 +374,11 @@ function getStorageKey(userId) {
 
 function getBackupStorageKey(userId, timestamp) {
   return `backups:appData:${userId}:${timestamp}`;
+}
+
+function getAttachmentKey(userId, value) {
+  const cleanValue = String(value || "").replace(/^\/+/, "");
+  return `${userId}/${cleanValue}`;
 }
 
 function getUserKey(username) {
@@ -385,6 +427,134 @@ async function saveData(env, userId, payload) {
   }
 
   return result.envelope;
+}
+
+async function uploadAttachment(env, userId, request) {
+  if (!env.SHERLLY_ATTACHMENTS?.put) {
+    throw createHttpError(503, "云附件暂未启用");
+  }
+
+  const contentLength = Number(request.headers.get("Content-Length") || 0);
+  const maxBytes = 10 * 1024 * 1024;
+
+  if (contentLength > maxBytes) {
+    throw createHttpError(413, "云附件超过 10 MB 限制");
+  }
+
+  const body = await request.arrayBuffer();
+
+  if (body.byteLength > maxBytes) {
+    throw createHttpError(413, "云附件超过 10 MB 限制");
+  }
+
+  const objectId = randomBase64Url(18);
+  const objectKey = getAttachmentKey(userId, objectId);
+  const checksum = await sha256Base64Url(new Uint8Array(body));
+  const filename = String(request.headers.get("X-Sherlly-Filename") || "attachment").slice(0, 160);
+  const contentType = String(request.headers.get("Content-Type") || "application/octet-stream").slice(0, 120);
+
+  await env.SHERLLY_ATTACHMENTS.put(objectKey, body, {
+    httpMetadata: {
+      contentType,
+      contentDisposition: `attachment; filename="${filename.replace(/[^\w. -]/g, "_")}"`,
+    },
+    customMetadata: {
+      userId,
+      filename,
+      checksum,
+    },
+  });
+
+  return {
+    ok: true,
+    attachment: {
+      objectKey,
+      filename,
+      mime: contentType,
+      size: body.byteLength,
+      checksum: `sha256:${checksum}`,
+      createdAt: new Date().toISOString(),
+      status: "available",
+    },
+  };
+}
+
+async function readAttachment(env, userId, objectKey, request) {
+  if (!env.SHERLLY_ATTACHMENTS?.get) {
+    throw createHttpError(503, "云附件暂未启用");
+  }
+
+  const cleanKey = decodeURIComponent(objectKey || "");
+
+  if (!cleanKey.startsWith(`${userId}/`)) {
+    throw createHttpError(404, "附件不存在");
+  }
+
+  const object = await env.SHERLLY_ATTACHMENTS.get(cleanKey);
+
+  if (!object) {
+    throw createHttpError(404, "附件不存在");
+  }
+
+  const headers = new Headers();
+  object.writeHttpMetadata(headers);
+  headers.set("Access-Control-Allow-Origin", getCorsHeaders(request, env).headers["Access-Control-Allow-Origin"]);
+  headers.set("Vary", "Origin");
+  headers.set("Cache-Control", "private, max-age=300");
+  return new Response(object.body, { headers });
+}
+
+async function deleteAttachment(env, userId, objectKey) {
+  if (!env.SHERLLY_ATTACHMENTS?.delete) {
+    throw createHttpError(503, "云附件暂未启用");
+  }
+
+  const cleanKey = decodeURIComponent(objectKey || "");
+
+  if (!cleanKey.startsWith(`${userId}/`)) {
+    throw createHttpError(404, "附件不存在");
+  }
+
+  await env.SHERLLY_ATTACHMENTS.delete(cleanKey);
+  return { ok: true };
+}
+
+async function runWorkersAi(env, body) {
+  if (!env.AI?.run) {
+    throw createHttpError(503, "Workers AI 暂未启用");
+  }
+
+  const prompt = String(body?.prompt || "").trim().slice(0, 4000);
+
+  if (!prompt) {
+    throw createHttpError(400, "AI 问题不能为空");
+  }
+
+  const context = String(body?.context || "").slice(0, 12000);
+  const model = String(env.WORKERS_AI_MODEL || "").trim();
+
+  if (!model) {
+    throw createHttpError(503, "Workers AI 尚未配置模型");
+  }
+
+  const result = await env.AI.run(model, {
+    messages: [
+      {
+        role: "system",
+        content: "你是工作事项助理。只根据提供的非敏感工作上下文回答，禁止索取或复述密码、密钥和安全速记内容。",
+      },
+      {
+        role: "user",
+        content: context ? `${prompt}\n\n工作上下文：\n${context}` : prompt,
+      },
+    ],
+  });
+
+  return {
+    ok: true,
+    model,
+    answer: String(result?.response || result?.result || "").trim(),
+  };
 }
 
 export class SherllyAuthStore {
@@ -798,6 +968,8 @@ async function handleRequest(request, env) {
     return jsonResponse(request, env, { ok: false, message: "CORS origin is not allowed" }, 403);
   }
 
+  enforceRateLimit(request, url);
+
   if (url.pathname === "/health" && request.method === "GET") {
     return jsonResponse(request, env, { ok: true, service: "sherlly-cloudflare-worker" });
   }
@@ -818,7 +990,12 @@ async function handleRequest(request, env) {
     }, kvReady && authReady && userDataReady ? 200 : 500);
   }
 
-  if (url.pathname !== "/api/data" && !url.pathname.startsWith("/api/auth/")) {
+  if (
+    url.pathname !== "/api/data" &&
+    !url.pathname.startsWith("/api/auth/") &&
+    !url.pathname.startsWith("/api/attachments") &&
+    url.pathname !== "/api/ai"
+  ) {
     return jsonResponse(request, env, { ok: false, message: "Not found" }, 404);
   }
 
@@ -858,6 +1035,22 @@ async function handleRequest(request, env) {
   const auth = await getAuthenticatedSession(request, env);
   const userId = normalizeUserId(auth.user.id);
 
+  if (url.pathname === "/api/ai" && request.method === "POST") {
+    return jsonResponse(request, env, await runWorkersAi(env, await request.json()));
+  }
+
+  if (url.pathname === "/api/attachments" && request.method === "POST") {
+    return jsonResponse(request, env, await uploadAttachment(env, userId, request), 201);
+  }
+
+  if (url.pathname.startsWith("/api/attachments/") && request.method === "GET") {
+    return readAttachment(env, userId, url.pathname.slice("/api/attachments/".length), request);
+  }
+
+  if (url.pathname.startsWith("/api/attachments/") && request.method === "DELETE") {
+    return jsonResponse(request, env, await deleteAttachment(env, userId, url.pathname.slice("/api/attachments/".length)));
+  }
+
   if (request.method === "GET") {
     return jsonResponse(request, env, await loadData(env, userId));
   }
@@ -881,7 +1074,9 @@ export default {
     try {
       return await handleRequest(request, env);
     } catch (error) {
-      return jsonResponse(request, env, { ok: false, message: error.message || "Worker error" }, error.status || 500);
+      const status = Number(error.status) || 500;
+      const message = status >= 500 ? "服务暂时不可用，请稍后重试" : error.message || "Worker error";
+      return jsonResponse(request, env, { ok: false, message }, status);
     }
   },
 };

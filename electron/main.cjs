@@ -9,16 +9,19 @@ const {
   Tray,
   nativeImage,
   shell,
+  safeStorage,
 } = require("electron");
 const { autoUpdater } = require("electron-updater");
 const childProcess = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
+const { randomBytes } = require("node:crypto");
 
 const APP_NAME = "Sherlly Assistant";
 const APP_USER_MODEL_ID = "com.sherlly.assistant";
 const UPDATE_REPOSITORY = "sherllyzhao/--";
 const DATA_FILE_NAME = "sherlly-data.json";
+const DEVICE_KEY_FILE_NAME = "sherlly-device-key.bin";
 const RENDERER_CONFIG_FILE_NAME = "renderer-config.json";
 const QUICK_CAPTURE_SHORTCUT = "CommandOrControl+Alt+S";
 const LOCAL_DEV_RENDERER_URL = "http://127.0.0.1:5188";
@@ -46,6 +49,10 @@ const defaultData = {
   candidates: [],
   logs: [],
   vaultItems: [],
+  tools: [],
+  habits: [],
+  vaultCandidates: [],
+  tombstones: [],
   settings: {
     soundEnabled: true,
   },
@@ -53,6 +60,33 @@ const defaultData = {
 
 function getDataPath() {
   return path.join(app.getPath("userData"), DATA_FILE_NAME);
+}
+
+function getDeviceKeyPath() {
+  return path.join(app.getPath("userData"), DEVICE_KEY_FILE_NAME);
+}
+
+function getDeviceKey() {
+  if (!safeStorage.isEncryptionAvailable()) {
+    return { ok: false, available: false, message: "系统安全存储不可用，请使用主密码解锁" };
+  }
+
+  const keyPath = getDeviceKeyPath();
+  let encryptedKey;
+
+  try {
+    encryptedKey = fs.existsSync(keyPath) ? fs.readFileSync(keyPath) : null;
+
+    if (!encryptedKey) {
+      encryptedKey = safeStorage.encryptString(randomBytes(32).toString("base64url"));
+      fs.writeFileSync(keyPath, encryptedKey, { mode: 0o600 });
+    }
+
+    return { ok: true, available: true, key: safeStorage.decryptString(encryptedKey) };
+  } catch (error) {
+    console.warn("Failed to access device key:", error.message);
+    return { ok: false, available: true, message: "设备密钥读取失败，请使用主密码解锁" };
+  }
 }
 
 function getDataPaths() {
@@ -83,6 +117,10 @@ function normalizeData(data) {
     candidates: Array.isArray(data?.candidates) ? data.candidates : [],
     logs: Array.isArray(data?.logs) ? data.logs : [],
     vaultItems: Array.isArray(data?.vaultItems) ? data.vaultItems : [],
+    tools: Array.isArray(data?.tools) ? data.tools : [],
+    habits: Array.isArray(data?.habits) ? data.habits : [],
+    vaultCandidates: Array.isArray(data?.vaultCandidates) ? data.vaultCandidates : [],
+    tombstones: Array.isArray(data?.tombstones) ? data.tombstones : [],
     settings: {
       ...defaultData.settings,
       ...(data?.settings && typeof data.settings === "object" ? data.settings : {}),
@@ -91,7 +129,8 @@ function normalizeData(data) {
 }
 
 function hasMeaningfulData(data) {
-  return data.tasks.length > 0 || data.candidates.length > 0 || data.logs.length > 0 || data.vaultItems.length > 0;
+  return ["tasks", "candidates", "logs", "vaultItems", "tools", "habits", "vaultCandidates", "tombstones"]
+    .some((collection) => data[collection].length > 0);
 }
 
 function getItemTimestamp(item) {
@@ -131,6 +170,17 @@ function mergeData(currentData, nextData) {
     candidates: mergeItems(current.candidates, next.candidates),
     logs: mergeItems(current.logs, next.logs),
     vaultItems: mergeItems(current.vaultItems, next.vaultItems),
+    tools: mergeItems(current.tools, next.tools),
+    habits: mergeItems(current.habits, next.habits),
+    vaultCandidates: mergeItems(current.vaultCandidates, next.vaultCandidates),
+    tombstones: [...current.tombstones, ...next.tombstones].reduce((items, tombstone) => {
+      const key = `${tombstone.entityType}:${tombstone.entityId}`;
+      const index = items.findIndex((item) => `${item.entityType}:${item.entityId}` === key);
+      if (index < 0) return [...items, tombstone];
+      return new Date(tombstone.deletedAt).getTime() >= new Date(items[index].deletedAt).getTime()
+        ? items.map((item, itemIndex) => itemIndex === index ? tombstone : item)
+        : items;
+    }, []),
     settings: {
       ...current.settings,
       ...next.settings,
@@ -667,6 +717,8 @@ function registerShortcuts() {
   if (!registered) {
     console.warn(`Failed to register quick capture shortcut: ${QUICK_CAPTURE_SHORTCUT}`);
   }
+
+  return registered;
 }
 
 function notify(payload = {}) {
@@ -841,6 +893,11 @@ app.whenReady().then(() => {
 
   ipcMain.handle("sherlly:load-data", () => readDataFile());
   ipcMain.handle("sherlly:save-data", (_event, data) => writeDataFile(data));
+  ipcMain.handle("sherlly:get-device-key", () => getDeviceKey());
+  ipcMain.handle("sherlly:get-shortcut-status", () => ({
+    shortcut: QUICK_CAPTURE_SHORTCUT,
+    registered: globalShortcut.isRegistered(QUICK_CAPTURE_SHORTCUT),
+  }));
   ipcMain.handle("sherlly:notify", (_event, payload) => {
     notify(payload);
     return true;

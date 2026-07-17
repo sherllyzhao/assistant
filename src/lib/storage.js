@@ -322,6 +322,39 @@ async function requestCloud(path, options = {}) {
   return parseCloudResponse(response, options.fallbackMessage || "云端请求失败");
 }
 
+export async function uploadCloudAttachment(file, filename = "attachment") {
+  const auth = getStoredAuth();
+
+  if (!cloudApiBaseUrl || !auth) {
+    throw createAuthRequiredError();
+  }
+
+  return requestCloud("/api/attachments", {
+    method: "POST",
+    headers: {
+      "Content-Type": file?.type || "application/octet-stream",
+      "X-Sherlly-Filename": String(filename || "attachment").slice(0, 160),
+    },
+    body: file,
+    fallbackMessage: "云附件上传失败",
+  });
+}
+
+export async function requestCloudAi({ prompt, context = "" }) {
+  if (!cloudApiBaseUrl || !getStoredAuth()) {
+    const error = new Error("云端 AI 不可用");
+    error.code = "AI_UNAVAILABLE";
+    throw error;
+  }
+
+  return requestCloud("/api/ai", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ prompt, context }),
+    fallbackMessage: "云端 AI 请求失败",
+  });
+}
+
 async function loadCloudEnvelope() {
   return normalizeSyncEnvelope(await requestCloud("/api/data", { fallbackMessage: "云端读取失败" }));
 }

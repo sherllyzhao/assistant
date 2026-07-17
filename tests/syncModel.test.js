@@ -8,6 +8,7 @@ import {
   normalizeSyncData,
   validateEmbeddedImageLimits,
 } from "../src/lib/syncModel.js";
+import { createDataExport, validateDataImport } from "../src/lib/dataPortability.js";
 
 describe("syncModel", () => {
   it("normalizes all V3 collections", () => {
@@ -59,5 +60,21 @@ describe("syncModel", () => {
       ok: false,
       code: "EMBEDDED_IMAGE_ATTACHMENT_LIMIT",
     });
+  });
+
+  it("exports and validates a checksum-protected document", async () => {
+    const exported = await createDataExport(
+      { tasks: [{ id: "task-1", title: "导出测试" }] },
+      { revision: 7, appVersion: "3.0.0" },
+    );
+    const validated = await validateDataImport(exported);
+
+    expect(validated.envelope.revision).toBe(7);
+    expect(validated.statistics.tasks).toBe(1);
+
+    await expect(validateDataImport({
+      ...exported,
+      envelope: { ...exported.envelope, checksum: "sha256:invalid" },
+    })).rejects.toThrow("checksum");
   });
 });

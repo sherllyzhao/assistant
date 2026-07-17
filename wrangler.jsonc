@@ -27,6 +27,16 @@
       }
     ]
   },
+  "r2_buckets": [
+    {
+      "binding": "SHERLLY_ATTACHMENTS",
+      "bucket_name": "sherlly-attachments",
+      "preview_bucket_name": "sherlly-attachments-preview"
+    }
+  ],
+  "ai": {
+    "binding": "AI"
+  },
   "migrations": [
     {
       "tag": "v1-auth-store",
@@ -43,6 +53,8 @@
   ],
   "vars": {
     "SHERLLY_SESSION_TTL_DAYS": "30",
-    "CORS_ORIGIN": "*"
+    "CORS_ORIGIN": "http://localhost:5188",
+    "TURNSTILE_EXPECTED_HOSTNAME": "",
+    "WORKERS_AI_MODEL": ""
   }
 }

@@ -27,6 +27,7 @@ import {
   ShieldCheck,
   Trash2,
   UserRound,
+  Upload,
   Wand2,
   Volume2,
   VolumeX,
@@ -41,6 +42,7 @@ import {
   createId,
   dailySlots,
   detectCandidatesFromText,
+  detectVaultCandidatesFromText,
   createDailyReport,
   createAttachment,
   createTaskOrganizingSuggestions,
@@ -71,6 +73,7 @@ import {
   normalizeDailySlots,
   normalizeReminderWindow,
   normalizeTags,
+  normalizeWorkDomain,
   normalizeVaultItem,
   normalizeVaultItems,
   priorities,
@@ -79,6 +82,7 @@ import {
   taskStatuses,
   toDateTimeInputValue,
   vaultCategories,
+  workDomains,
 } from "./lib/domain.js";
 import { decryptVaultPayload, encryptVaultPayload, hasVaultCryptoSupport } from "./lib/vaultCrypto.js";
 import {
@@ -101,9 +105,12 @@ import {
   logoutAccount,
   openAttachment,
   registerAccount,
+  requestCloudAi,
   subscribeSyncStatus,
 } from "./lib/storage.js";
 import { createTombstone } from "./lib/syncModel.js";
+import { createDataExport, downloadDataExport, validateDataImport } from "./lib/dataPortability.js";
+import { runClientDiagnostics } from "./lib/diagnostics.js";
 import { ToolsLibraryPanel } from "./components/ToolsLibraryPanel.jsx";
 
 const filterOptions = [
@@ -311,6 +318,7 @@ function taskToDraft(task) {
     title: task.title || "",
     source: task.source || "手动录入",
     owner: task.owner || "",
+    workDomain: task.workDomain || "",
     dueAt: toDateTimeInputValue(task.dueAt),
     reminderStartAt: toDateTimeInputValue(reminderWindow.reminderStartAt),
     reminderEndAt: toDateTimeInputValue(reminderWindow.reminderEndAt),
@@ -365,6 +373,10 @@ function App() {
   const [isAuthenticating, setIsAuthenticating] = useState(false);
   const [syncError, setSyncError] = useState("");
   const [syncStatus, setSyncStatus] = useState(() => getSyncStatus(account?.id));
+  const [portabilityStatus, setPortabilityStatus] = useState({ type: "", message: "" });
+  const [importPreview, setImportPreview] = useState(null);
+  const [diagnostics, setDiagnostics] = useState(null);
+  const [cloudAiSummary, setCloudAiSummary] = useState(null);
   const [passwordDraft, setPasswordDraft] = useState({ currentPassword: "", nextPassword: "", confirmPassword: "" });
   const [passwordStatus, setPasswordStatus] = useState({ type: "", message: "" });
   const [isPasswordSaving, setIsPasswordSaving] = useState(false);
@@ -553,6 +565,68 @@ function App() {
       }
 
       setSyncError(error.message || "手动同步失败，请稍后重试");
+    }
+  }
+
+  async function exportAccountData() {
+    try {
+      const exportDocument = await createDataExport(data, {
+        revision: syncStatus.revision,
+        deviceId: getSyncDeviceId(),
+        appVersion: "3.0.0",
+      });
+      downloadDataExport(exportDocument, `sherlly-data-${new Date().toISOString().slice(0, 10)}.json`);
+      setPortabilityStatus({ type: "success", message: "数据已导出；本机附件仅保留路径引用。" });
+    } catch (error) {
+      setPortabilityStatus({ type: "error", message: error.message || "数据导出失败" });
+    }
+  }
+
+  async function handleDataImport(event) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+
+    if (!file) {
+      return;
+    }
+
+    try {
+      const parsed = JSON.parse(await file.text());
+      const preview = await validateDataImport(parsed);
+      setImportPreview(preview);
+      setPortabilityStatus({ type: "success", message: "文件校验通过，请选择合并或替换。" });
+    } catch (error) {
+      setImportPreview(null);
+      setPortabilityStatus({ type: "error", message: error.message || "导入文件无效" });
+    }
+  }
+
+  async function applyDataImport(mode) {
+    if (!importPreview) {
+      return;
+    }
+
+    if (mode === "replace" && !window.confirm("替换会覆盖当前业务数据，并先创建云端备份。确定继续吗？")) {
+      return;
+    }
+
+    const nextData = mode === "merge" ? mergeData(data, importPreview.envelope.data) : importPreview.envelope.data;
+    setData(nextData);
+
+    try {
+      await saveAppData(nextData);
+      setImportPreview(null);
+      setPortabilityStatus({ type: "success", message: mode === "merge" ? "数据已合并并保存。" : "数据已替换并保存，原数据已进入备份。" });
+    } catch (error) {
+      setPortabilityStatus({ type: "error", message: error.message || "导入保存失败，当前数据仍保留在页面中。" });
+    }
+  }
+
+  async function handleRunDiagnostics() {
+    try {
+      setDiagnostics(await runClientDiagnostics(syncStatus));
+    } catch (error) {
+      setPortabilityStatus({ type: "error", message: error.message || "诊断失败" });
     }
   }
 
@@ -869,8 +943,22 @@ function App() {
     [currentTime, data.logs, data.tasks, logRange],
   );
   const aiWorkspaceAnswer = useMemo(
-    () => createAiWorkspaceAnswer(data.tasks, data.logs, assistantQuestion, currentTime),
-    [assistantQuestion, currentTime, data.logs, data.tasks],
+    () => {
+      const localAnswer = createAiWorkspaceAnswer(data.tasks, data.logs, assistantQuestion, currentTime);
+
+      if (cloudAiSummary?.question !== assistantQuestion || !cloudAiSummary.answer) {
+        return localAnswer;
+      }
+
+      return {
+        ...localAnswer,
+        label: "Workers AI",
+        title: "云端辅助分析",
+        summary: cloudAiSummary.answer,
+        isFallback: false,
+      };
+    },
+    [assistantQuestion, cloudAiSummary, currentTime, data.logs, data.tasks],
   );
   const workMemoryLibrary = useMemo(
     () => createWorkMemoryLibrary(data.tasks, currentTime),
@@ -983,10 +1071,32 @@ function App() {
     window.location.reload();
   }
 
-  function askAssistant(question) {
+  async function askAssistant(question) {
     const cleanQuestion = String(question || "").trim() || assistantQuestionPresets[0];
     setAssistantDraftQuestion(cleanQuestion);
     setAssistantQuestion(cleanQuestion);
+
+    if (!cloudSyncEnabled || !account) {
+      return;
+    }
+
+    try {
+      const context = JSON.stringify(data.tasks.slice(0, 40).map((task) => ({
+        title: task.title,
+        owner: task.owner,
+        status: task.status,
+        priority: task.priority,
+        workDomain: task.workDomain,
+        dueAt: task.dueAt,
+      })));
+      const result = await requestCloudAi({ prompt: cleanQuestion, context });
+      setCloudAiSummary({ question: cleanQuestion, answer: result.answer });
+    } catch (error) {
+      if (error.code !== "AI_UNAVAILABLE" && error.status !== 503) {
+        console.error(error);
+      }
+      setCloudAiSummary(null);
+    }
   }
 
   function downloadTaskCalendar(task) {
@@ -1744,7 +1854,8 @@ function App() {
             ...task,
             title: draft.title.trim(),
             source: draft.source.trim(),
-            owner: draft.owner.trim(),
+             owner: draft.owner.trim(),
+             workDomain: normalizeWorkDomain(draft.workDomain),
             dueAt: draft.dueAt ? new Date(draft.dueAt).toISOString() : reminderWindow.reminderEndAt,
             reminderStartAt: reminderWindow.reminderStartAt,
             reminderEndAt: reminderWindow.reminderEndAt,
@@ -2070,16 +2181,26 @@ function App() {
 
   function detectWechatTasks() {
     const detected = detectCandidatesFromText(wechatText);
+    const vaultCandidates = detectVaultCandidatesFromText(wechatText);
 
-    if (detected.length === 0) {
+    if (detected.length === 0 && vaultCandidates.length === 0) {
       return;
     }
 
     setData((current) => ({
       ...current,
       candidates: [...detected, ...current.candidates],
+      vaultCandidates: [...vaultCandidates, ...current.vaultCandidates],
     }));
     setWechatText("");
+  }
+
+  function dismissVaultCandidate(candidate) {
+    setData((current) => ({
+      ...current,
+      vaultCandidates: current.vaultCandidates.filter((item) => item.id !== candidate.id),
+      tombstones: [...current.tombstones, createTombstone("vaultCandidates", candidate.id, getSyncDeviceId())],
+    }));
   }
 
   function confirmCandidate(candidate) {
@@ -2453,13 +2574,21 @@ function App() {
               </div>
             </>
           ) : activeView === "profile" ? (
-            <ProfilePanel
+              <ProfilePanel
               account={account}
               draft={passwordDraft}
+              importPreview={importPreview}
+              diagnostics={diagnostics}
               isSubmitting={isPasswordSaving}
+              onApplyImport={applyDataImport}
+              onExportData={exportAccountData}
+              onImportDataFile={handleDataImport}
+              onRunDiagnostics={handleRunDiagnostics}
               onSubmit={submitPasswordChange}
               onUpdate={updatePasswordDraft}
+              portabilityStatus={portabilityStatus}
               status={passwordStatus}
+              syncStatus={syncStatus}
             />
           ) : activeView === "vault" ? (
             <VaultPanel
@@ -2501,7 +2630,16 @@ function App() {
             />
           ) : activeView === "memory" ? (
             <WorkMemoryPanel
+              habits={data.habits}
               memory={workMemoryLibrary}
+              onDeleteHabit={(habitId) =>
+                setData((current) => ({
+                  ...current,
+                  habits: current.habits.filter((habit) => habit.id !== habitId),
+                  tombstones: [...current.tombstones, createTombstone("habits", habitId, getSyncDeviceId())],
+                }))
+              }
+              onHabitsChange={(habits) => setData((current) => ({ ...current, habits }))}
               onViewTask={(task) => setDetailTaskId(task.id)}
             />
           ) : activeView === "tools" ? (
@@ -2608,6 +2746,17 @@ function App() {
                     {withCurrentOption(ownerOptions, draft.owner).map((option) => (
                       <option key={option.value} value={option.value}>
                         {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  工作域
+                  <select value={draft.workDomain} onChange={(event) => updateDraft("workDomain", event.target.value)}>
+                    <option value="">自动识别</option>
+                    {workDomains.map((domain) => (
+                      <option key={domain.value} value={domain.value}>
+                        {domain.label}
                       </option>
                     ))}
                   </select>
@@ -2840,6 +2989,27 @@ function App() {
                 ))
               )}
             </div>
+            {data.vaultCandidates.length > 0 ? (
+              <section className="vault-candidate-panel">
+                <div className="panel-heading">
+                  <div>
+                    <p className="eyebrow">Sensitive Candidate</p>
+                    <h3>疑似安全速记</h3>
+                  </div>
+                  <ShieldCheck size={18} />
+                </div>
+                <p className="profile-muted">只保留脱敏提示；确认后请在安全速记页面手动填写，系统不会自动保存原文。</p>
+                {data.vaultCandidates.map((candidate) => (
+                  <article className="candidate-item" key={candidate.id}>
+                    <strong>{candidate.title}</strong>
+                    <span>{candidate.hint}</span>
+                    <button className="secondary-button" type="button" onClick={() => dismissVaultCandidate(candidate)}>
+                      已审阅
+                    </button>
+                  </article>
+                ))}
+              </section>
+            ) : null}
           </section>
 
         </aside>
@@ -2875,7 +3045,22 @@ function App() {
   );
 }
 
-function ProfilePanel({ account, draft, isSubmitting, onSubmit, onUpdate, status }) {
+function ProfilePanel({
+  account,
+  diagnostics,
+  draft,
+  importPreview,
+  isSubmitting,
+  onApplyImport,
+  onExportData,
+  onImportDataFile,
+  onRunDiagnostics,
+  onSubmit,
+  onUpdate,
+  portabilityStatus,
+  status,
+  syncStatus,
+}) {
   return (
     <div className="profile-panel">
       <div className="section-toolbar profile-toolbar">
@@ -2948,6 +3133,63 @@ function ProfilePanel({ account, draft, isSubmitting, onSubmit, onUpdate, status
               {isSubmitting ? "保存中" : "保存新密码"}
             </button>
           </form>
+        </section>
+
+        <section className="profile-card profile-data-card">
+          <strong>数据与备份</strong>
+          <p className="profile-muted">
+            {syncStatus?.lastSyncedAt ? `最近同步：${new Date(syncStatus.lastSyncedAt).toLocaleString("zh-CN")}` : "尚未完成云端同步"}
+          </p>
+          <div className="profile-data-actions">
+            <button className="secondary-button" type="button" onClick={onExportData}>
+              <Download size={16} />
+              导出 JSON
+            </button>
+            <label className="secondary-button file-button">
+              <Upload size={16} />
+              校验导入
+              <input type="file" accept="application/json,.json" onChange={onImportDataFile} />
+            </label>
+          </div>
+          {importPreview ? (
+            <div className="import-preview">
+              <p>校验通过 · 导出于 {importPreview.exportedAt || "未知时间"}</p>
+              <p>
+                任务 {importPreview.statistics.tasks} · 工具 {importPreview.statistics.tools} · 保险箱 {importPreview.statistics.vaultItems}
+              </p>
+              <div className="profile-data-actions">
+                <button className="secondary-button" type="button" onClick={() => onApplyImport("merge")}>
+                  合并导入
+                </button>
+                <button className="danger-button" type="button" onClick={() => onApplyImport("replace")}>
+                  替换导入
+                </button>
+              </div>
+            </div>
+          ) : null}
+          {portabilityStatus?.message ? (
+            <p className={`profile-message ${portabilityStatus.type === "success" ? "is-success" : "is-error"}`} role="alert">
+              {portabilityStatus.message}
+            </p>
+          ) : null}
+        </section>
+
+        <section className="profile-card profile-data-card">
+          <strong>本机诊断</strong>
+          <p className="profile-muted">诊断只返回状态和占用数字，不上传 Token、密码、完整路径或保险箱明文。</p>
+          <button className="secondary-button" type="button" onClick={onRunDiagnostics}>
+            <ShieldCheck size={16} />
+            运行诊断
+          </button>
+          {diagnostics ? (
+            <dl className="diagnostics-list">
+              <div><dt>通知权限</dt><dd>{diagnostics.notification}</dd></div>
+              <div><dt>PWA Service Worker</dt><dd>{diagnostics.serviceWorker ? "已注册" : "未注册"}</dd></div>
+              <div><dt>快捷键</dt><dd>{diagnostics.shortcut}</dd></div>
+              <div><dt>同步状态</dt><dd>{diagnostics.syncStatus}</dd></div>
+              <div><dt>本地占用</dt><dd>{Math.ceil(diagnostics.storageUsageBytes / 1024)} KB</dd></div>
+            </dl>
+          ) : null}
         </section>
       </div>
     </div>
@@ -3244,7 +3486,8 @@ function VaultItemCard({ item, onCopyValue, onDeleteItem, onEditItem, onLockItem
   );
 }
 
-function WorkMemoryPanel({ memory, onViewTask }) {
+function WorkMemoryPanel({ habits = [], memory, onDeleteHabit, onHabitsChange, onViewTask }) {
+  const [habitDraft, setHabitDraft] = useState({ title: "", detail: "" });
   const metrics = [
     { label: "任务样本", value: memory.metrics?.taskSamples || 0 },
     { label: "联系人", value: memory.metrics?.contacts || 0 },
@@ -3325,6 +3568,60 @@ function WorkMemoryPanel({ memory, onViewTask }) {
           title="项目记忆"
         />
       </div>
+      <section className="report-section memory-section habit-library-section">
+        <div className="section-toolbar">
+          <div>
+            <p className="eyebrow">Editable Memory</p>
+            <h3>可编辑工作习惯</h3>
+          </div>
+          <Wand2 size={18} />
+        </div>
+        <form
+          className="habit-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            const title = habitDraft.title.trim();
+            if (!title) return;
+            onHabitsChange([
+              ...habits,
+              { id: createId("habit"), title, detail: habitDraft.detail.trim(), updatedAt: new Date().toISOString() },
+            ]);
+            setHabitDraft({ title: "", detail: "" });
+          }}
+        >
+          <input
+            value={habitDraft.title}
+            onChange={(event) => setHabitDraft((current) => ({ ...current, title: event.target.value }))}
+            placeholder="例如：客户报价先让同事复核"
+          />
+          <input
+            value={habitDraft.detail}
+            onChange={(event) => setHabitDraft((current) => ({ ...current, detail: event.target.value }))}
+            placeholder="补充触发条件或执行方式"
+          />
+          <button className="secondary-button" type="submit">
+            <Plus size={16} />
+            添加习惯
+          </button>
+        </form>
+        {habits.length === 0 ? (
+          <EmptyState icon={<Wand2 size={22} />} text="还没有手动维护的工作习惯" />
+        ) : (
+          <div className="habit-list">
+            {habits.map((habit) => (
+              <article className="habit-item" key={habit.id}>
+                <div>
+                  <strong>{habit.title}</strong>
+                  {habit.detail ? <p>{habit.detail}</p> : null}
+                </div>
+                <button className="icon-button danger" type="button" onClick={() => onDeleteHabit(habit.id)} title="删除习惯">
+                  <Trash2 size={16} />
+                </button>
+              </article>
+            ))}
+          </div>
+        )}
+      </section>
     </div>
   );
 }

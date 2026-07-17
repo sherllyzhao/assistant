@@ -3,6 +3,8 @@ const { contextBridge, ipcRenderer } = require("electron");
 contextBridge.exposeInMainWorld("sherlly", {
   loadData: () => ipcRenderer.invoke("sherlly:load-data"),
   saveData: (data) => ipcRenderer.invoke("sherlly:save-data", data),
+  getDeviceKey: () => ipcRenderer.invoke("sherlly:get-device-key"),
+  getShortcutStatus: () => ipcRenderer.invoke("sherlly:get-shortcut-status"),
   notify: (payload) => ipcRenderer.invoke("sherlly:notify", payload),
   launchAction: (action) => ipcRenderer.invoke("sherlly:launch-action", action),
   selectAttachments: () => ipcRenderer.invoke("sherlly:select-attachments"),
