@@ -77,4 +77,51 @@ describe("syncModel", () => {
       envelope: { ...exported.envelope, checksum: "sha256:invalid" },
     })).rejects.toThrow("checksum");
   });
+
+  it("removes plaintext vault fields from exports and imports", async () => {
+    const vaultItem = {
+      id: "vault-1",
+      title: "测试条目",
+      usernameHint: "u***",
+      username: "plain-user",
+      password: "plain-password",
+      note: "plain-note",
+      plaintext: { password: "secret" },
+      encrypted: {
+        version: "v1",
+        algorithm: "AES-GCM",
+        kdf: "PBKDF2-SHA-256",
+        iterations: 210000,
+        salt: "salt",
+        iv: "iv",
+        ciphertext: "cipher",
+        masterPassword: "must-not-export",
+      },
+    };
+
+    const exported = await createDataExport({ vaultItems: [vaultItem] });
+    const exportedVaultItem = exported.envelope.data.vaultItems[0];
+
+    expect(exportedVaultItem).toMatchObject({
+      id: "vault-1",
+      title: "测试条目",
+      usernameHint: "u***",
+      encrypted: { ciphertext: "cipher" },
+    });
+    expect(exportedVaultItem).not.toHaveProperty("username");
+    expect(exportedVaultItem).not.toHaveProperty("password");
+    expect(exportedVaultItem).not.toHaveProperty("note");
+    expect(exportedVaultItem).not.toHaveProperty("plaintext");
+    expect(exportedVaultItem.encrypted).not.toHaveProperty("masterPassword");
+
+    const unsafeEnvelope = await createSyncEnvelope({ vaultItems: [vaultItem] });
+    const validated = await validateDataImport({
+      format: "sherlly-assistant-data-export",
+      formatVersion: 1,
+      envelope: unsafeEnvelope,
+    });
+
+    expect(validated.envelope.data.vaultItems[0]).toEqual(exportedVaultItem);
+    expect(validated.envelope.checksum).toBe(await calculateChecksum(validated.envelope.data));
+  });
 });

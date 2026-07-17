@@ -18,6 +18,61 @@ const entityCollections = [
   "vaultCandidates",
 ];
 
+const vaultItemFields = [
+  "id",
+  "title",
+  "category",
+  "usernameHint",
+  "tags",
+  "createdAt",
+  "updatedAt",
+  "lastViewedAt",
+];
+
+const encryptedVaultFields = [
+  "version",
+  "algorithm",
+  "kdf",
+  "iterations",
+  "salt",
+  "iv",
+  "ciphertext",
+];
+
+function copyAllowedFields(value, fields) {
+  const result = {};
+
+  for (const field of fields) {
+    if (Object.prototype.hasOwnProperty.call(value, field)) {
+      result[field] = field === "tags" && Array.isArray(value[field])
+        ? [...value[field]]
+        : value[field];
+    }
+  }
+
+  return result;
+}
+
+function sanitizeVaultItem(item) {
+  const source = item && typeof item === "object" ? item : {};
+  const sanitized = copyAllowedFields(source, vaultItemFields);
+
+  if (source.encrypted && typeof source.encrypted === "object") {
+    sanitized.encrypted = copyAllowedFields(source.encrypted, encryptedVaultFields);
+  }
+
+  return sanitized;
+}
+
+function sanitizePortableData(data) {
+  const normalized = normalizeSyncData(data);
+
+  return {
+    ...normalized,
+    vaultItems: normalized.vaultItems.map(sanitizeVaultItem),
+  };
+}
+
 function getEntityStatistics(data) {
   const normalized = normalizeSyncData(data);
   const statistics = {};
@@ -48,7 +103,7 @@ function validateEntityIds(data) {
 }
 
 export async function createDataExport(data, metadata = {}) {
-  const normalized = normalizeSyncData(data);
+  const normalized = sanitizePortableData(data);
   const envelope = normalizeSyncEnvelope({
     schemaVersion: SYNC_SCHEMA_VERSION,
     revision: Number.isInteger(metadata.revision) ? metadata.revision : 0,
@@ -88,15 +143,19 @@ export async function validateDataImport(value) {
     throw new Error("导出文件 checksum 校验失败，已拒绝导入");
   }
 
-  const imageValidation = validateEmbeddedImageLimits(envelope.data);
+  const sanitizedData = sanitizePortableData(envelope.data);
+  const imageValidation = validateEmbeddedImageLimits(sanitizedData);
 
   if (!imageValidation.ok) {
     throw new Error(imageValidation.message);
   }
 
+  envelope.data = sanitizedData;
+  envelope.checksum = await calculateChecksum(sanitizedData);
+
   return {
     envelope,
-    statistics: getEntityStatistics(envelope.data),
+    statistics: getEntityStatistics(sanitizedData),
     exportedAt: String(value.exportedAt || ""),
     appVersion: String(value.appVersion || ""),
   };

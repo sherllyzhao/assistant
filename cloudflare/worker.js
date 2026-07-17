@@ -1028,10 +1028,6 @@ async function handleRequest(request, env) {
     return jsonResponse(request, env, await logoutAccount(env, request));
   }
 
-  if (url.pathname !== "/api/data") {
-    return jsonResponse(request, env, { ok: false, message: "Not found" }, 404);
-  }
-
   const auth = await getAuthenticatedSession(request, env);
   const userId = normalizeUserId(auth.user.id);
 
@@ -1049,6 +1045,10 @@ async function handleRequest(request, env) {
 
   if (url.pathname.startsWith("/api/attachments/") && request.method === "DELETE") {
     return jsonResponse(request, env, await deleteAttachment(env, userId, url.pathname.slice("/api/attachments/".length)));
+  }
+
+  if (url.pathname !== "/api/data") {
+    return jsonResponse(request, env, { ok: false, message: "Method not allowed" }, 405);
   }
 
   if (request.method === "GET") {
