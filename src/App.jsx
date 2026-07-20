@@ -47,6 +47,7 @@ import {
   createAttachment,
   createFollowUpDraft,
   createFollowUpLog,
+  createScheduleSuggestions,
   createTaskOrganizingSuggestions,
   createVaultPlaintext,
   createWorkMemoryLibrary,
@@ -994,6 +995,10 @@ function App() {
   const organizingSuggestions = useMemo(
     () => createTaskOrganizingSuggestions(data.tasks, currentTime),
     [currentTime, data.tasks],
+  );
+  const scheduleSuggestions = useMemo(
+    () => createScheduleSuggestions(data.tasks, data.habits, currentTime),
+    [currentTime, data.habits, data.tasks],
   );
   const mobileFocusTasks = useMemo(() => getMobileFocusTasks(data.tasks, currentTime), [currentTime, data.tasks]);
   const detailTask = useMemo(
@@ -2624,6 +2629,17 @@ function App() {
                   </button>
                 ))}
               </div>
+
+              <ScheduleSuggestionsPanel
+                onAddToCalendar={(task) => {
+                  const fullTask = data.tasks.find((item) => item.id === task.id);
+                  if (fullTask) {
+                    downloadTaskCalendar(fullTask);
+                  }
+                }}
+                onViewTask={(taskId) => setDetailTaskId(taskId)}
+                suggestions={scheduleSuggestions.suggestions}
+              />
 
               <div className="task-list">
                 {filteredTasks.length === 0 ? (
@@ -4285,6 +4301,64 @@ function EmptyState({ icon, text }) {
       {icon}
       <span>{text}</span>
     </div>
+  );
+}
+
+function ScheduleSuggestionsPanel({ onAddToCalendar, onViewTask, suggestions = [] }) {
+  return (
+    <section className="schedule-suggestions-panel" aria-label="今日安排建议">
+      <div className="schedule-suggestions-heading">
+        <div>
+          <p className="eyebrow">Schedule Assist</p>
+          <h3>今日安排建议</h3>
+        </div>
+        <CalendarClock size={20} />
+      </div>
+      {suggestions.length === 0 ? (
+        <p className="schedule-suggestions-empty">当前没有需要调整的安排。</p>
+      ) : (
+        <div className="schedule-suggestion-list">
+          {suggestions.map((suggestion) => (
+            <article className={`schedule-suggestion-card is-${suggestion.level}`} key={suggestion.id}>
+              <div className="schedule-suggestion-card-heading">
+                <div>
+                  <strong>{suggestion.title}</strong>
+                  <p>{suggestion.reason}</p>
+                </div>
+                <span>{suggestion.type === "habit" ? "习惯" : suggestion.level === "high" ? "优先" : "建议"}</span>
+              </div>
+              <p className="schedule-suggestion-action">{suggestion.action}</p>
+              {suggestion.tasks.length > 0 ? (
+                <div className="schedule-suggestion-tasks">
+                  {suggestion.tasks.map((task) => (
+                    <div className="schedule-suggestion-task" key={task.id}>
+                      <div>
+                        <strong>{task.title}</strong>
+                        <span>
+                          {getPriorityMeta(task.priority).label}
+                          {task.dueAt ? ` · 截止 ${formatDateTime(task.dueAt)}` : ""}
+                          {task.followUpAt ? ` · 跟进 ${formatDateTime(task.followUpAt)}` : ""}
+                        </span>
+                      </div>
+                      <div className="schedule-suggestion-task-actions">
+                        <button className="icon-button" type="button" onClick={() => onViewTask(task.id)} title="查看任务">
+                          <Eye size={16} />
+                        </button>
+                        {task.dueAt ? (
+                          <button className="icon-button" type="button" onClick={() => onAddToCalendar(task)} title="导出日历">
+                            <CalendarClock size={16} />
+                          </button>
+                        ) : null}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+            </article>
+          ))}
+        </div>
+      )}
+    </section>
   );
 }
 

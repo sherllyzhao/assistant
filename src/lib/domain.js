@@ -1551,6 +1551,194 @@ export function createTaskOrganizingSuggestions(tasks, now = new Date()) {
   };
 }
 
+function getSchedulePriorityScore(priority) {
+  return { high: 0, normal: 1, low: 2 }[priority] ?? 1;
+}
+
+function getScheduleTaskSummary(task) {
+  return {
+    id: task.id,
+    title: task.title || "",
+    status: task.status || "todo",
+    priority: task.priority || "normal",
+    dueAt: task.dueAt || "",
+    waitingFor: normalizeWaitingFor(task.waitingFor),
+    followUpAt: normalizeFollowUpAt(task.followUpAt),
+    dailySlots: getTaskDailySlots(task),
+  };
+}
+
+function sortScheduleTasks(left, right) {
+  const priorityDelta = getSchedulePriorityScore(left.priority) - getSchedulePriorityScore(right.priority);
+
+  if (priorityDelta !== 0) {
+    return priorityDelta;
+  }
+
+  const leftDue = getFiniteTime(left.dueAt);
+  const rightDue = getFiniteTime(right.dueAt);
+  const leftDueValue = Number.isFinite(leftDue) ? leftDue : Number.MAX_SAFE_INTEGER;
+  const rightDueValue = Number.isFinite(rightDue) ? rightDue : Number.MAX_SAFE_INTEGER;
+
+  return leftDueValue - rightDueValue || String(left.title || "").localeCompare(String(right.title || ""), "zh-CN");
+}
+
+function createScheduleSuggestion({ action, id, level, reason, tasks, title, type }) {
+  return {
+    id,
+    type,
+    level,
+    title,
+    reason,
+    action,
+    tasks: tasks.map(getScheduleTaskSummary),
+  };
+}
+
+export function createScheduleSuggestions(tasks, habits = [], now = new Date()) {
+  const activeTasks = (Array.isArray(tasks) ? tasks : []).filter((task) => task?.id && isActiveTask(task));
+  const dateKey = getLocalDateKey(now);
+  const dayEnd = new Date(now);
+  dayEnd.setHours(23, 59, 59, 999);
+  const nextDayLimit = now.getTime() + 24 * 60 * 60 * 1000;
+  const currentSlot = getCurrentSlotValue(now);
+  const suggestions = [];
+
+  const dueTodayTasks = activeTasks
+    .filter((task) => {
+      const dueTime = getFiniteTime(task.dueAt);
+      return Number.isFinite(dueTime) && dueTime <= dayEnd.getTime();
+    })
+    .sort((left, right) => {
+      const leftDue = getFiniteTime(left.dueAt);
+      const rightDue = getFiniteTime(right.dueAt);
+      const overdueDelta = Number(leftDue < now.getTime()) - Number(rightDue < now.getTime());
+      return overdueDelta || leftDue - rightDue || sortScheduleTasks(left, right);
+    })
+    .slice(0, 4);
+
+  if (dueTodayTasks.length > 0) {
+    const overdueCount = dueTodayTasks.filter((task) => getFiniteTime(task.dueAt) < now.getTime()).length;
+    const todayDueCount = dueTodayTasks.filter((task) => getLocalDateKey(task.dueAt) === dateKey).length;
+    suggestions.push(
+      createScheduleSuggestion({
+        action: overdueCount > 0 ? "先处理逾期任务，再安排今天截止的事项" : "按截止时间从早到晚处理",
+        id: `schedule:deadline:${dateKey}`,
+        level: overdueCount > 0 ? "high" : "medium",
+        reason: overdueCount > 0
+          ? `有 ${overdueCount} 件任务已经逾期，另有 ${todayDueCount} 件任务今天截止。`
+          : `有 ${todayDueCount} 件任务今天截止，建议提前留出处理时间。`,
+        tasks: dueTodayTasks,
+        title: "优先处理临近截止任务",
+        type: "deadline",
+      }),
+    );
+  }
+
+  const highPriorityTasks = activeTasks
+    .filter((task) => task.priority === "high" && !dueTodayTasks.some((dueTask) => dueTask.id === task.id))
+    .sort(sortScheduleTasks)
+    .slice(0, 4);
+
+  if (highPriorityTasks.length > 0) {
+    suggestions.push(
+      createScheduleSuggestion({
+        action: "先安排一个明确的处理时段，完成后再切换到普通任务",
+        id: `schedule:priority:${dateKey}`,
+        level: "high",
+        reason: `还有 ${highPriorityTasks.length} 件高优先级任务没有进入今天的截止清单。`,
+        tasks: highPriorityTasks,
+        title: "给高优先级任务留出专注时间",
+        type: "priority",
+      }),
+    );
+  }
+
+  const followUpTasks = activeTasks
+    .filter((task) => {
+      if (task.status !== "waiting") {
+        return false;
+      }
+
+      const followUpTime = getFiniteTime(task.followUpAt);
+      return Number.isFinite(followUpTime) && followUpTime <= nextDayLimit;
+    })
+    .sort((left, right) => getFiniteTime(left.followUpAt) - getFiniteTime(right.followUpAt))
+    .slice(0, 4);
+
+  if (followUpTasks.length > 0) {
+    const dueFollowUpCount = followUpTasks.filter((task) => getFiniteTime(task.followUpAt) <= now.getTime()).length;
+    suggestions.push(
+      createScheduleSuggestion({
+        action: dueFollowUpCount > 0 ? "先打开任务详情确认跟进，再决定是否发送草稿" : "把跟进安排在截止日期前的固定时间",
+        id: `schedule:follow-up:${dateKey}`,
+        level: dueFollowUpCount > 0 ? "high" : "medium",
+        reason: dueFollowUpCount > 0
+          ? `有 ${dueFollowUpCount} 件等待他人的任务已到跟进时间。`
+          : `未来 24 小时内有 ${followUpTasks.length} 件等待他人的任务需要跟进。`,
+        tasks: followUpTasks,
+        title: "安排等待他人的跟进",
+        type: "follow-up",
+      }),
+    );
+  }
+
+  const currentSlotTasks = activeTasks
+    .filter((task) => {
+      const progress = getDailyProgress(task, now);
+      return progress.isScheduled && progress.nextSlot?.value === currentSlot;
+    })
+    .sort(sortScheduleTasks)
+    .slice(0, 4);
+
+  if (currentSlotTasks.length > 0) {
+    const slotLabel = getSlotMeta(currentSlot).label;
+    suggestions.push(
+      createScheduleSuggestion({
+        action: `在${slotLabel}时段完成一次，避免把安排拖到下一个时段`,
+        id: `schedule:slot:${dateKey}:${currentSlot}`,
+        level: "medium",
+        reason: `有 ${currentSlotTasks.length} 件任务的下一个计划时段是${slotLabel}。`,
+        tasks: currentSlotTasks,
+        title: `按${slotLabel}计划推进任务`,
+        type: "daily-slot",
+      }),
+    );
+  }
+
+  const habit = (Array.isArray(habits) ? habits : [])
+    .map((item) => ({
+      detail: String(item?.detail || "").trim(),
+      title: String(item?.title || "").trim(),
+    }))
+    .find((item) => item.title);
+
+  if (habit) {
+    const habitTasks = activeTasks.slice().sort(sortScheduleTasks).slice(0, 3);
+    suggestions.push(
+      createScheduleSuggestion({
+        action: "排期前先对照这条习惯，确认处理顺序和必要的复核步骤",
+        id: `schedule:habit:${dateKey}`,
+        level: "low",
+        reason: `已记录工作习惯：${habit.title}${habit.detail ? `；${habit.detail}` : ""}。`,
+        tasks: habitTasks,
+        title: "按你的工作习惯安排",
+        type: "habit",
+      }),
+    );
+  }
+
+  return {
+    generatedAt: now.toISOString(),
+    dateKey,
+    metrics: {
+      activeTasks: activeTasks.length,
+      suggestions: suggestions.length,
+    },
+    suggestions: suggestions.slice(0, 6),
+  };
+}
+
 export function createDailyReport(tasks, logs, range = "today", now = new Date()) {
   const scopedLogs = filterLogsByRange(logs, range, now);
   const activeTasks = tasks.filter((task) => isActiveTask(task));

@@ -3515,3 +3515,129 @@ textarea:focus {
   color: var(--warning-ink, #8a5a00) !important;
   font-weight: 800;
 }
+
+.schedule-suggestions-panel {
+  display: grid;
+  gap: 12px;
+  margin: 18px 0;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-muted);
+}
+
+.schedule-suggestions-heading,
+.schedule-suggestion-card-heading,
+.schedule-suggestion-task {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.schedule-suggestions-heading h3 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.schedule-suggestions-heading > svg {
+  color: var(--accent);
+}
+
+.schedule-suggestions-empty {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.schedule-suggestion-list {
+  display: grid;
+  gap: 10px;
+}
+
+.schedule-suggestion-card {
+  display: grid;
+  gap: 10px;
+  padding: 13px;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--accent);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.schedule-suggestion-card.is-high {
+  border-left-color: var(--danger);
+}
+
+.schedule-suggestion-card.is-medium {
+  border-left-color: var(--warning);
+}
+
+.schedule-suggestion-card-heading > div,
+.schedule-suggestion-task > div:first-child {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.schedule-suggestion-card-heading strong,
+.schedule-suggestion-task strong {
+  overflow-wrap: anywhere;
+}
+
+.schedule-suggestion-card-heading p,
+.schedule-suggestion-action,
+.schedule-suggestion-task span {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.schedule-suggestion-card-heading > span {
+  flex: 0 0 auto;
+  padding: 3px 7px;
+  border-radius: 999px;
+  color: var(--accent-strong);
+  background: var(--accent-soft);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.schedule-suggestion-card.is-high .schedule-suggestion-card-heading > span {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.schedule-suggestion-card.is-medium .schedule-suggestion-card-heading > span {
+  color: var(--warning-ink);
+  background: var(--warning-soft);
+}
+
+.schedule-suggestion-tasks {
+  display: grid;
+  gap: 7px;
+  padding-top: 2px;
+}
+
+.schedule-suggestion-task {
+  align-items: center;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+.schedule-suggestion-task-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 5px;
+}
+
+@media (max-width: 720px) {
+  .schedule-suggestions-panel {
+    padding: 13px;
+  }
+
+  .schedule-suggestion-task {
+    align-items: flex-start;
+  }
+}
