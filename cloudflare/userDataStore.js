@@ -50,6 +50,21 @@ export class SherllyUserData {
           data_json TEXT NOT NULL,
           backed_up_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS oauth_states (
+          provider TEXT NOT NULL,
+          state_id TEXT PRIMARY KEY,
+          code_verifier TEXT NOT NULL,
+          expires_at TEXT NOT NULL,
+          created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS oauth_tokens (
+          provider TEXT PRIMARY KEY,
+          ciphertext TEXT NOT NULL,
+          scope TEXT NOT NULL,
+          token_type TEXT NOT NULL,
+          expires_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
       `);
     });
   }
@@ -188,5 +203,117 @@ export class SherllyUserData {
       ok: true,
       envelope: nextEnvelope,
     };
+  }
+
+  async saveOAuthState(payload) {
+    const provider = String(payload?.provider || "").trim().slice(0, 64);
+    const stateId = String(payload?.stateId || "").trim().slice(0, 160);
+    const codeVerifier = String(payload?.codeVerifier || "").trim().slice(0, 256);
+    const expiresAt = String(payload?.expiresAt || "").trim();
+    const createdAt = String(payload?.createdAt || new Date().toISOString()).trim();
+
+    if (!provider || !stateId || !codeVerifier || !expiresAt) {
+      return { ok: false, code: "INVALID_OAUTH_STATE", message: "OAuth state 参数无效" };
+    }
+
+    this.state.storage.sql.exec("DELETE FROM oauth_states WHERE expires_at <= ?", new Date().toISOString());
+    this.state.storage.sql.exec(
+      `INSERT OR REPLACE INTO oauth_states (provider, state_id, code_verifier, expires_at, created_at)
+       VALUES (?, ?, ?, ?, ?)`,
+      provider,
+      stateId,
+      codeVerifier,
+      expiresAt,
+      createdAt,
+    );
+
+    return { ok: true };
+  }
+
+  async consumeOAuthState(providerValue, stateIdValue) {
+    const provider = String(providerValue || "").trim().slice(0, 64);
+    const stateId = String(stateIdValue || "").trim().slice(0, 160);
+    const row = firstRow(this.state.storage.sql.exec(
+      `SELECT provider, state_id, code_verifier, expires_at, created_at
+       FROM oauth_states
+       WHERE provider = ? AND state_id = ?`,
+      provider,
+      stateId,
+    ));
+
+    this.state.storage.sql.exec("DELETE FROM oauth_states WHERE provider = ? AND state_id = ?", provider, stateId);
+
+    if (!row || new Date(String(row.expires_at)).getTime() <= Date.now()) {
+      return null;
+    }
+
+    return {
+      provider: String(row.provider),
+      stateId: String(row.state_id),
+      codeVerifier: String(row.code_verifier),
+      expiresAt: String(row.expires_at),
+      createdAt: String(row.created_at),
+    };
+  }
+
+  async saveOAuthToken(payload) {
+    const provider = String(payload?.provider || "").trim().slice(0, 64);
+    const ciphertext = String(payload?.ciphertext || "").trim().slice(0, 16000);
+    const scope = String(payload?.scope || "").trim().slice(0, 1000);
+    const tokenType = String(payload?.tokenType || "Bearer").trim().slice(0, 64) || "Bearer";
+    const expiresAt = String(payload?.expiresAt || "").trim();
+    const updatedAt = String(payload?.updatedAt || new Date().toISOString()).trim();
+
+    if (!provider || !ciphertext || !expiresAt) {
+      return { ok: false, code: "INVALID_OAUTH_TOKEN", message: "OAuth token 参数无效" };
+    }
+
+    this.state.storage.sql.exec(
+      `INSERT INTO oauth_tokens (provider, ciphertext, scope, token_type, expires_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(provider) DO UPDATE SET
+         ciphertext = excluded.ciphertext,
+         scope = excluded.scope,
+         token_type = excluded.token_type,
+         expires_at = excluded.expires_at,
+         updated_at = excluded.updated_at`,
+      provider,
+      ciphertext,
+      scope,
+      tokenType,
+      expiresAt,
+      updatedAt,
+    );
+
+    return { ok: true };
+  }
+
+  async getOAuthToken(providerValue) {
+    const provider = String(providerValue || "").trim().slice(0, 64);
+    const row = firstRow(this.state.storage.sql.exec(
+      `SELECT provider, ciphertext, scope, token_type, expires_at, updated_at
+       FROM oauth_tokens
+       WHERE provider = ?`,
+      provider,
+    ));
+
+    if (!row) {
+      return null;
+    }
+
+    return {
+      provider: String(row.provider),
+      ciphertext: String(row.ciphertext),
+      scope: String(row.scope),
+      tokenType: String(row.token_type),
+      expiresAt: String(row.expires_at),
+      updatedAt: String(row.updated_at),
+    };
+  }
+
+  async deleteOAuthToken(providerValue) {
+    const provider = String(providerValue || "").trim().slice(0, 64);
+    this.state.storage.sql.exec("DELETE FROM oauth_tokens WHERE provider = ?", provider);
+    return { ok: true };
   }
 }

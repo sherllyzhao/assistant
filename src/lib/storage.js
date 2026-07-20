@@ -356,6 +356,52 @@ export async function requestCloudAi({ prompt, context = "" }) {
   });
 }
 
+function ensureCloudIntegrationAvailable() {
+  if (!cloudApiBaseUrl || !getStoredAuth()) {
+    throw createAuthRequiredError("请先登录云端账号，再连接 Google Calendar");
+  }
+}
+
+export async function startGoogleCalendarOAuth() {
+  ensureCloudIntegrationAvailable();
+  return requestCloud("/api/integrations/google/start", {
+    fallbackMessage: "启动 Google Calendar 授权失败",
+  });
+}
+
+export async function getGoogleCalendarStatus() {
+  ensureCloudIntegrationAvailable();
+  return requestCloud("/api/integrations/google/status", {
+    fallbackMessage: "读取 Google Calendar 状态失败",
+  });
+}
+
+export async function disconnectGoogleCalendar() {
+  ensureCloudIntegrationAvailable();
+  return requestCloud("/api/integrations/google/disconnect", {
+    method: "POST",
+    fallbackMessage: "断开 Google Calendar 失败",
+  });
+}
+
+export async function listGoogleCalendarEvents({ timeMin = "", timeMax = "" } = {}) {
+  ensureCloudIntegrationAvailable();
+  const params = new URLSearchParams();
+
+  if (timeMin) {
+    params.set("timeMin", timeMin);
+  }
+
+  if (timeMax) {
+    params.set("timeMax", timeMax);
+  }
+
+  const query = params.toString();
+  return requestCloud(`/api/integrations/google/events${query ? `?${query}` : ""}`, {
+    fallbackMessage: "读取 Google Calendar 会议失败",
+  });
+}
+
 async function loadCloudEnvelope() {
   return normalizeSyncEnvelope(await requestCloud("/api/data", { fallbackMessage: "云端读取失败" }));
 }

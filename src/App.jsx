@@ -112,6 +112,7 @@ import {
   sendNotification,
   selectAttachments,
   getAttachmentPreview,
+  getGoogleCalendarStatus,
   getStoredAccount,
   getSyncDeviceId,
   getSyncStatus,
@@ -122,6 +123,9 @@ import {
   openAttachment,
   registerAccount,
   requestCloudAi,
+  disconnectGoogleCalendar as disconnectGoogleCalendarApi,
+  listGoogleCalendarEvents,
+  startGoogleCalendarOAuth,
   subscribeSyncStatus,
 } from "./lib/storage.js";
 import { createTombstone } from "./lib/syncModel.js";
@@ -394,6 +398,10 @@ function App() {
   const [isAuthenticating, setIsAuthenticating] = useState(false);
   const [syncError, setSyncError] = useState("");
   const [syncStatus, setSyncStatus] = useState(() => getSyncStatus(account?.id));
+  const [googleCalendarStatus, setGoogleCalendarStatus] = useState({ connected: false, scope: "", updatedAt: "" });
+  const [googleCalendarEvents, setGoogleCalendarEvents] = useState([]);
+  const [googleCalendarMessage, setGoogleCalendarMessage] = useState("");
+  const [isGoogleCalendarBusy, setIsGoogleCalendarBusy] = useState(false);
   const [portabilityStatus, setPortabilityStatus] = useState({ type: "", message: "" });
   const [importPreview, setImportPreview] = useState(null);
   const [diagnostics, setDiagnostics] = useState(null);
@@ -442,6 +450,30 @@ function App() {
     setSyncStatus(getSyncStatus(account?.id));
     return subscribeSyncStatus(setSyncStatus);
   }, [account?.id]);
+
+  useEffect(() => {
+    if (!cloudSyncEnabled || !account || activeView !== "connections") {
+      return;
+    }
+
+    syncGoogleCalendarStatus();
+  }, [account?.id, activeView]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const result = params.get("google_oauth");
+    const code = params.get("google_oauth_code");
+
+    if (!result) {
+      return;
+    }
+
+    setActiveView("connections");
+    setGoogleCalendarMessage(result === "success"
+      ? "Google Calendar 已连接，可读取未来 7 天的会议预览。"
+      : `Google Calendar 连接失败：${code || "未知错误"}`);
+    window.history.replaceState({}, document.title, `${window.location.pathname}${window.location.hash}`);
+  }, []);
 
   useEffect(() => {
     const intervalId = window.setInterval(() => setCurrentTime(new Date()), CLOCK_TICK_MS);
@@ -2363,6 +2395,79 @@ function App() {
     updateExternalConnection(connection.id, (current) => revokeExternalConnection(current));
   }
 
+  async function syncGoogleCalendarStatus() {
+    if (!cloudSyncEnabled || !account) {
+      return;
+    }
+
+    try {
+      const status = await getGoogleCalendarStatus();
+      setGoogleCalendarStatus(status);
+    } catch (error) {
+      setGoogleCalendarStatus({ connected: false, scope: "", updatedAt: "" });
+      setGoogleCalendarMessage(error.message || "Google Calendar 状态读取失败");
+    }
+  }
+
+  async function connectGoogleCalendar() {
+    setIsGoogleCalendarBusy(true);
+    setGoogleCalendarMessage("");
+
+    try {
+      const result = await startGoogleCalendarOAuth();
+
+      if (!result?.authorizationUrl) {
+        throw new Error("Google OAuth 未返回授权地址");
+      }
+
+      window.location.assign(result.authorizationUrl);
+    } catch (error) {
+      setGoogleCalendarMessage(error.message || "启动 Google Calendar 授权失败");
+      setIsGoogleCalendarBusy(false);
+    }
+  }
+
+  async function refreshGoogleCalendarEvents() {
+    setIsGoogleCalendarBusy(true);
+    setGoogleCalendarMessage("");
+
+    try {
+      const result = await listGoogleCalendarEvents();
+      setGoogleCalendarEvents(Array.isArray(result?.events) ? result.events : []);
+      setGoogleCalendarStatus((current) => ({
+        ...current,
+        connected: true,
+        updatedAt: result?.fetchedAt || current.updatedAt,
+      }));
+    } catch (error) {
+      setGoogleCalendarMessage(error.message || "Google Calendar 读取失败");
+    } finally {
+      setIsGoogleCalendarBusy(false);
+    }
+  }
+
+  async function disconnectGoogleCalendarRecord(connection) {
+    if (!window.confirm("断开 Google Calendar 并删除服务端 refresh token？")) {
+      return;
+    }
+
+    setIsGoogleCalendarBusy(true);
+    setGoogleCalendarMessage("");
+
+    try {
+      await disconnectGoogleCalendarApi();
+      setGoogleCalendarStatus({ connected: false, scope: "", updatedAt: "" });
+      setGoogleCalendarEvents([]);
+      if (connection) {
+        revokeExternalConnectionRecord(connection);
+      }
+    } catch (error) {
+      setGoogleCalendarMessage(error.message || "断开 Google Calendar 失败");
+    } finally {
+      setIsGoogleCalendarBusy(false);
+    }
+  }
+
   function updateAuthDraft(field, value) {
     setAuthDraft((current) => ({ ...current, [field]: value }));
   }
@@ -2732,9 +2837,16 @@ function App() {
           ) : activeView === "connections" ? (
             <ExternalConnectionsPanel
               connections={externalConnections}
+              googleCalendarEvents={googleCalendarEvents}
+              googleCalendarMessage={googleCalendarMessage}
+              googleCalendarStatus={googleCalendarStatus}
+              isGoogleCalendarBusy={isGoogleCalendarBusy}
               onAdd={addExternalConnection}
+              onConnectGoogle={connectGoogleCalendar}
               onGrant={grantExternalConnection}
+              onRefreshGoogle={refreshGoogleCalendarEvents}
               onRevoke={revokeExternalConnectionRecord}
+              onDisconnectGoogle={disconnectGoogleCalendarRecord}
             />
           ) : activeView === "vault" ? (
             <VaultPanel
@@ -3246,7 +3358,19 @@ function App() {
   );
 }
 
-function ExternalConnectionsPanel({ connections = [], onAdd, onGrant, onRevoke }) {
+function ExternalConnectionsPanel({
+  connections = [],
+  googleCalendarEvents = [],
+  googleCalendarMessage = "",
+  googleCalendarStatus = {},
+  isGoogleCalendarBusy = false,
+  onAdd,
+  onConnectGoogle,
+  onGrant,
+  onRefreshGoogle,
+  onRevoke,
+  onDisconnectGoogle,
+}) {
   const [selectedProvider, setSelectedProvider] = useState(externalConnectionProviders[0]?.value || "");
 
   return (
@@ -3289,8 +3413,13 @@ function ExternalConnectionsPanel({ connections = [], onAdd, onGrant, onRevoke }
 
       <div className="external-connection-grid">
         {externalConnectionProviders.map((provider) => {
+          const isGoogle = provider.value === "google-calendar";
           const connection = connections.find((item) => item.provider === provider.value);
-          const status = externalConnectionStatuses.find((item) => item.value === connection?.status);
+          const isGoogleConnected = isGoogle && googleCalendarStatus.connected;
+          const effectiveConnection = isGoogleConnected
+            ? { ...(connection || {}), status: "connected", updatedAt: googleCalendarStatus.updatedAt || connection?.updatedAt || "" }
+            : connection;
+          const status = externalConnectionStatuses.find((item) => item.value === effectiveConnection?.status);
 
           return (
             <article className="profile-card external-connection-card" key={provider.value}>
@@ -3299,7 +3428,7 @@ function ExternalConnectionsPanel({ connections = [], onAdd, onGrant, onRevoke }
                   <strong>{provider.label}</strong>
                   <span>{provider.category === "calendar" ? "日历" : provider.category === "mail" ? "邮件" : "消息"}</span>
                 </div>
-                <em className={`external-connection-status ${connection ? `is-${connection.status}` : "is-unregistered"}`}>
+                <em className={`external-connection-status ${effectiveConnection ? `is-${effectiveConnection.status}` : "is-unregistered"}`}>
                   {status?.label || "未登记"}
                 </em>
               </div>
@@ -3307,8 +3436,20 @@ function ExternalConnectionsPanel({ connections = [], onAdd, onGrant, onRevoke }
               <div className="external-connection-scopes">
                 {provider.scopes.map((scope) => <code key={scope}>{scope}</code>)}
               </div>
-              {connection?.consentGrantedAt ? <small>确认于 {formatDateTime(connection.consentGrantedAt)}</small> : null}
-              {connection?.revokedAt ? <small>撤销于 {formatDateTime(connection.revokedAt)}</small> : null}
+              {effectiveConnection?.consentGrantedAt ? <small>确认于 {formatDateTime(effectiveConnection.consentGrantedAt)}</small> : null}
+              {effectiveConnection?.updatedAt && isGoogleConnected ? <small>最近读取于 {formatDateTime(effectiveConnection.updatedAt)}</small> : null}
+              {effectiveConnection?.revokedAt ? <small>撤销于 {formatDateTime(effectiveConnection.revokedAt)}</small> : null}
+              {isGoogle && googleCalendarMessage ? <p className="external-connection-message">{googleCalendarMessage}</p> : null}
+              {isGoogle && isGoogleConnected && googleCalendarEvents.length > 0 ? (
+                <div className="google-calendar-event-list">
+                  {googleCalendarEvents.map((event) => (
+                    <div className="google-calendar-event" key={event.id || `${event.title}-${event.startAt}`}>
+                      <strong>{event.title}</strong>
+                      <span>{event.allDay ? "全天" : formatDateTime(event.startAt)}{event.endAt ? ` · ${formatDateTime(event.endAt)}` : ""}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
               <div className="external-connection-actions">
                 {!connection || connection.status === "revoked" ? (
                   <button className="secondary-button" type="button" onClick={() => onAdd(provider.value)}>
@@ -3322,7 +3463,25 @@ function ExternalConnectionsPanel({ connections = [], onAdd, onGrant, onRevoke }
                     我已确认范围
                   </button>
                 ) : null}
-                {connection && connection.status !== "revoked" ? (
+                {isGoogle && connection?.status === "consent-granted" && !isGoogleConnected ? (
+                  <button className="primary-button" type="button" onClick={onConnectGoogle} disabled={isGoogleCalendarBusy}>
+                    <ShieldCheck size={16} />
+                    {isGoogleCalendarBusy ? "连接中" : "连接 Google Calendar"}
+                  </button>
+                ) : null}
+                {isGoogle && isGoogleConnected ? (
+                  <>
+                    <button className="secondary-button" type="button" onClick={onRefreshGoogle} disabled={isGoogleCalendarBusy}>
+                      <CalendarClock size={16} />
+                      {isGoogleCalendarBusy ? "读取中" : "刷新会议预览"}
+                    </button>
+                    <button className="secondary-button" type="button" onClick={() => onDisconnectGoogle(connection)} disabled={isGoogleCalendarBusy}>
+                      <X size={16} />
+                      断开连接
+                    </button>
+                  </>
+                ) : null}
+                {connection && connection.status !== "revoked" && !(isGoogle && isGoogleConnected) ? (
                   <button className="secondary-button" type="button" onClick={() => onRevoke(connection)}>
                     <X size={16} />
                     撤销登记

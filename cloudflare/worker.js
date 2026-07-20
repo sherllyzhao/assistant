@@ -19,6 +19,13 @@ const defaultData = {
 const PASSWORD_HASH_ITERATIONS = 100000;
 const PASSWORD_HASH_KEY_LENGTH = 32;
 const SESSION_TTL_DAYS = 30;
+const GOOGLE_PROVIDER = "google-calendar";
+const GOOGLE_AUTH_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth";
+const GOOGLE_TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token";
+const GOOGLE_EVENTS_ENDPOINT = "https://www.googleapis.com/calendar/v3/calendars/primary/events";
+const GOOGLE_SCOPE = "https://www.googleapis.com/auth/calendar.readonly";
+const GOOGLE_OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
+const GOOGLE_ACCESS_TOKEN_SKEW_MS = 60 * 1000;
 const textEncoder = new TextEncoder();
 const requestBuckets = new Map();
 
@@ -156,6 +163,91 @@ async function sha256Base64Url(value) {
   const bytes = value instanceof Uint8Array ? value : textEncoder.encode(String(value));
   const digest = await crypto.subtle.digest("SHA-256", bytes);
   return bytesToBase64Url(new Uint8Array(digest));
+}
+
+function encodeJsonBase64Url(value) {
+  return bytesToBase64Url(textEncoder.encode(JSON.stringify(value)));
+}
+
+function decodeJsonBase64Url(value) {
+  const binary = atob(String(value || "").replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(String(value || "").length / 4) * 4, "="));
+  const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+  return JSON.parse(new TextDecoder().decode(bytes));
+}
+
+async function createHmacSignature(value, secret) {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    textEncoder.encode(String(secret || "")),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const signature = await crypto.subtle.sign("HMAC", key, textEncoder.encode(String(value || "")));
+  return bytesToBase64Url(new Uint8Array(signature));
+}
+
+async function createOAuthState(payload, secret) {
+  const encoded = encodeJsonBase64Url(payload);
+  const signature = await createHmacSignature(encoded, secret);
+  return `${encoded}.${signature}`;
+}
+
+async function verifyOAuthState(value, secret) {
+  const [encoded, signature] = String(value || "").split(".");
+
+  if (!encoded || !signature) {
+    return null;
+  }
+
+  const expectedSignature = await createHmacSignature(encoded, secret);
+
+  if (!timingSafeEqualString(signature, expectedSignature)) {
+    return null;
+  }
+
+  try {
+    return decodeJsonBase64Url(encoded);
+  } catch {
+    return null;
+  }
+}
+
+async function deriveOAuthEncryptionKey(secret) {
+  const digest = await crypto.subtle.digest("SHA-256", textEncoder.encode(String(secret || "")));
+  return crypto.subtle.importKey("raw", digest, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
+}
+
+async function encryptOAuthPayload(payload, secret) {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const key = await deriveOAuthEncryptionKey(secret);
+  const ciphertext = await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv },
+    key,
+    textEncoder.encode(JSON.stringify(payload)),
+  );
+
+  return `${bytesToBase64Url(iv)}.${bytesToBase64Url(new Uint8Array(ciphertext))}`;
+}
+
+async function decryptOAuthPayload(value, secret) {
+  const [encodedIv, encodedCiphertext] = String(value || "").split(".");
+
+  if (!encodedIv || !encodedCiphertext) {
+    return null;
+  }
+
+  try {
+    const key = await deriveOAuthEncryptionKey(secret);
+    const plaintext = await crypto.subtle.decrypt(
+      { name: "AES-GCM", iv: base64UrlToBytes(encodedIv) },
+      key,
+      base64UrlToBytes(encodedCiphertext),
+    );
+    return JSON.parse(new TextDecoder().decode(plaintext));
+  } catch {
+    return null;
+  }
 }
 
 async function pbkdf2Hash(password, salt, iterations, keyLength) {
@@ -405,6 +497,314 @@ function getUserDataStoreStub(env, userId) {
   }
 
   return env.SHERLLY_USER_DATA.get(env.SHERLLY_USER_DATA.idFromName(userId));
+}
+
+function getGoogleOAuthConfig(env, request) {
+  const config = {
+    clientId: String(env.GOOGLE_OAUTH_CLIENT_ID || "").trim(),
+    clientSecret: String(env.GOOGLE_OAUTH_CLIENT_SECRET || "").trim(),
+    redirectUri: String(env.GOOGLE_OAUTH_REDIRECT_URI || "").trim(),
+    successUrl: String(env.GOOGLE_OAUTH_SUCCESS_URL || "").trim(),
+    stateSecret: String(env.GOOGLE_OAUTH_STATE_SECRET || "").trim(),
+    tokenEncryptionKey: String(env.GOOGLE_OAUTH_TOKEN_KEY || "").trim(),
+  };
+
+  if (Object.values(config).some((value) => !value)) {
+    throw createHttpError(503, "Google Calendar OAuth 尚未完成 Worker 配置");
+  }
+
+  try {
+    const redirectUrl = new URL(config.redirectUri);
+    const successUrl = new URL(config.successUrl);
+    const requestUrl = new URL(request.url);
+    const isLocalHost = (value) => ["localhost", "127.0.0.1", "::1"].includes(value.hostname);
+
+    if (redirectUrl.protocol !== "https:" && !isLocalHost(requestUrl)) {
+      throw new Error("invalid redirect protocol");
+    }
+
+    if (successUrl.protocol !== "https:" && !isLocalHost(successUrl)) {
+      throw new Error("invalid success protocol");
+    }
+  } catch {
+    throw createHttpError(503, "Google Calendar OAuth URL 配置无效");
+  }
+
+  return config;
+}
+
+function redirectGoogleOAuthResult(config, status, code = "") {
+  const target = new URL(config.successUrl);
+  target.searchParams.set("google_oauth", status);
+
+  if (code) {
+    target.searchParams.set("google_oauth_code", code);
+  }
+
+  return Response.redirect(target.toString(), 302);
+}
+
+async function startGoogleOAuth(env, request, userId) {
+  const config = getGoogleOAuthConfig(env, request);
+  const store = getUserDataStoreStub(env, userId);
+  const stateId = randomBase64Url(24);
+  const codeVerifier = randomBase64Url(48);
+  const expiresAt = new Date(Date.now() + GOOGLE_OAUTH_STATE_TTL_MS).toISOString();
+  const savedState = await store.saveOAuthState({
+    provider: GOOGLE_PROVIDER,
+    stateId,
+    codeVerifier,
+    expiresAt,
+    createdAt: new Date().toISOString(),
+  });
+
+  if (!savedState?.ok) {
+    throw createHttpError(500, "无法保存 Google OAuth 状态");
+  }
+
+  const state = await createOAuthState({
+    provider: GOOGLE_PROVIDER,
+    userId,
+    stateId,
+    expiresAt,
+  }, config.stateSecret);
+  const codeChallenge = await sha256Base64Url(codeVerifier);
+  const authorizationUrl = new URL(GOOGLE_AUTH_ENDPOINT);
+  authorizationUrl.search = new URLSearchParams({
+    client_id: config.clientId,
+    redirect_uri: config.redirectUri,
+    response_type: "code",
+    scope: GOOGLE_SCOPE,
+    access_type: "offline",
+    include_granted_scopes: "true",
+    prompt: "consent",
+    state,
+    code_challenge: codeChallenge,
+    code_challenge_method: "S256",
+  }).toString();
+
+  return {
+    provider: GOOGLE_PROVIDER,
+    authorizationUrl: authorizationUrl.toString(),
+    expiresAt,
+  };
+}
+
+async function exchangeGoogleAuthorizationCode(config, code, codeVerifier) {
+  const response = await fetch(GOOGLE_TOKEN_ENDPOINT, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      code,
+      client_id: config.clientId,
+      client_secret: config.clientSecret,
+      redirect_uri: config.redirectUri,
+      grant_type: "authorization_code",
+      code_verifier: codeVerifier,
+    }),
+  });
+  const body = await response.json().catch(() => null);
+
+  if (!response.ok || !body?.access_token) {
+    throw createHttpError(502, "Google OAuth code 交换失败");
+  }
+
+  return body;
+}
+
+async function handleGoogleOAuthCallback(request, env) {
+  const config = getGoogleOAuthConfig(env, request);
+  const url = new URL(request.url);
+  const errorCode = String(url.searchParams.get("error") || "").trim();
+
+  if (errorCode) {
+    return redirectGoogleOAuthResult(config, "error", "google_denied");
+  }
+
+  const code = String(url.searchParams.get("code") || "").trim();
+  const stateValue = String(url.searchParams.get("state") || "").trim();
+  const state = await verifyOAuthState(stateValue, config.stateSecret);
+
+  if (!code || !state || state.provider !== GOOGLE_PROVIDER || !state.userId || !state.stateId) {
+    return redirectGoogleOAuthResult(config, "error", "invalid_state");
+  }
+
+  if (new Date(String(state.expiresAt || "")).getTime() <= Date.now()) {
+    return redirectGoogleOAuthResult(config, "error", "expired_state");
+  }
+
+  const userId = normalizeUserId(state.userId);
+  const store = getUserDataStoreStub(env, userId);
+  const savedState = await store.consumeOAuthState(GOOGLE_PROVIDER, state.stateId);
+
+  if (!savedState || savedState.codeVerifier === "") {
+    return redirectGoogleOAuthResult(config, "error", "replayed_state");
+  }
+
+  try {
+    const tokenResponse = await exchangeGoogleAuthorizationCode(config, code, savedState.codeVerifier);
+    const existingRecord = await store.getOAuthToken(GOOGLE_PROVIDER);
+    const existingPayload = existingRecord
+      ? await decryptOAuthPayload(existingRecord.ciphertext, config.tokenEncryptionKey)
+      : null;
+    const refreshToken = String(tokenResponse.refresh_token || existingPayload?.refreshToken || "").trim();
+
+    if (!refreshToken) {
+      return redirectGoogleOAuthResult(config, "error", "missing_refresh_token");
+    }
+
+    const expiresAt = new Date(Date.now() + Math.max(60, Number(tokenResponse.expires_in || 3600)) * 1000).toISOString();
+    const ciphertext = await encryptOAuthPayload({ refreshToken }, config.tokenEncryptionKey);
+    const savedToken = await store.saveOAuthToken({
+      provider: GOOGLE_PROVIDER,
+      ciphertext,
+      scope: String(tokenResponse.scope || GOOGLE_SCOPE),
+      tokenType: String(tokenResponse.token_type || "Bearer"),
+      expiresAt,
+      updatedAt: new Date().toISOString(),
+    });
+
+    if (!savedToken?.ok) {
+      return redirectGoogleOAuthResult(config, "error", "token_storage_failed");
+    }
+
+    return redirectGoogleOAuthResult(config, "success");
+  } catch {
+    return redirectGoogleOAuthResult(config, "error", "token_exchange_failed");
+  }
+}
+
+async function refreshGoogleAccessToken(env, request, userId) {
+  const config = getGoogleOAuthConfig(env, request);
+  const store = getUserDataStoreStub(env, userId);
+  const storedToken = await store.getOAuthToken(GOOGLE_PROVIDER);
+  const tokenPayload = await decryptOAuthPayload(storedToken?.ciphertext, config.tokenEncryptionKey);
+  const refreshToken = String(tokenPayload?.refreshToken || "").trim();
+
+  if (!refreshToken) {
+    throw createHttpError(401, "Google Calendar 尚未连接或授权已失效");
+  }
+
+  const response = await fetch(GOOGLE_TOKEN_ENDPOINT, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_id: config.clientId,
+      client_secret: config.clientSecret,
+      refresh_token: refreshToken,
+      grant_type: "refresh_token",
+    }),
+  });
+  const body = await response.json().catch(() => null);
+
+  if (!response.ok || !body?.access_token) {
+    throw createHttpError(401, "Google Calendar 授权已失效，请重新连接");
+  }
+
+  const expiresAt = new Date(Date.now() + Math.max(60, Number(body.expires_in || 3600)) * 1000).toISOString();
+  const nextRefreshToken = String(body.refresh_token || refreshToken).trim();
+  const ciphertext = await encryptOAuthPayload({ refreshToken: nextRefreshToken }, config.tokenEncryptionKey);
+  await store.saveOAuthToken({
+    provider: GOOGLE_PROVIDER,
+    ciphertext,
+    scope: String(body.scope || storedToken.scope || GOOGLE_SCOPE),
+    tokenType: String(body.token_type || storedToken.tokenType || "Bearer"),
+    expiresAt,
+    updatedAt: new Date().toISOString(),
+  });
+
+  return {
+    accessToken: String(body.access_token),
+    tokenType: String(body.token_type || storedToken.tokenType || "Bearer"),
+  };
+}
+
+export function getGoogleEventsWindow(url) {
+  const now = Date.now();
+  const defaultTimeMin = new Date(now).toISOString();
+  const defaultTimeMax = new Date(now + 7 * 24 * 60 * 60 * 1000).toISOString();
+  const timeMin = String(url.searchParams.get("timeMin") || defaultTimeMin);
+  const timeMax = String(url.searchParams.get("timeMax") || defaultTimeMax);
+  const minTime = new Date(timeMin).getTime();
+  const maxTime = new Date(timeMax).getTime();
+
+  if (!Number.isFinite(minTime) || !Number.isFinite(maxTime) || maxTime <= minTime || maxTime - minTime > 31 * 24 * 60 * 60 * 1000) {
+    throw createHttpError(400, "Google Calendar 查询时间窗口无效");
+  }
+
+  return {
+    timeMin: new Date(minTime).toISOString(),
+    timeMax: new Date(maxTime).toISOString(),
+  };
+}
+
+export function sanitizeGoogleEvent(event) {
+  const start = event?.start?.dateTime || event?.start?.date || "";
+  const end = event?.end?.dateTime || event?.end?.date || "";
+
+  return {
+    id: String(event?.id || "").slice(0, 200),
+    title: String(event?.summary || "未命名会议").trim().slice(0, 200),
+    startAt: String(start).slice(0, 64),
+    endAt: String(end).slice(0, 64),
+    allDay: Boolean(event?.start?.date && !event?.start?.dateTime),
+    status: event?.status === "cancelled" ? "cancelled" : "confirmed",
+  };
+}
+
+async function listGoogleEvents(env, request, userId) {
+  const url = new URL(request.url);
+  const window = getGoogleEventsWindow(url);
+  const token = await refreshGoogleAccessToken(env, request, userId);
+  const eventsUrl = new URL(GOOGLE_EVENTS_ENDPOINT);
+  eventsUrl.search = new URLSearchParams({
+    timeMin: window.timeMin,
+    timeMax: window.timeMax,
+    singleEvents: "true",
+    orderBy: "startTime",
+    showDeleted: "false",
+    maxResults: "50",
+  }).toString();
+  const response = await fetch(eventsUrl, {
+    headers: { Authorization: `${token.tokenType} ${token.accessToken}` },
+  });
+  const body = await response.json().catch(() => null);
+
+  if (!response.ok) {
+    throw createHttpError(response.status === 401 ? 401 : 502, response.status === 401
+      ? "Google Calendar 授权已失效，请重新连接"
+      : "Google Calendar 读取失败");
+  }
+
+  return {
+    provider: GOOGLE_PROVIDER,
+    fetchedAt: new Date().toISOString(),
+    window,
+    events: (Array.isArray(body?.items) ? body.items : []).map(sanitizeGoogleEvent),
+  };
+}
+
+async function getGoogleConnectionStatus(env, request, userId) {
+  const config = getGoogleOAuthConfig(env, request);
+  const store = getUserDataStoreStub(env, userId);
+  const storedToken = await store.getOAuthToken(GOOGLE_PROVIDER);
+  const tokenPayload = await decryptOAuthPayload(storedToken?.ciphertext, config.tokenEncryptionKey);
+
+  return {
+    provider: GOOGLE_PROVIDER,
+    connected: Boolean(tokenPayload?.refreshToken),
+    scope: storedToken?.scope || GOOGLE_SCOPE,
+    updatedAt: storedToken?.updatedAt || "",
+  };
+}
+
+async function disconnectGoogleCalendar(env, userId) {
+  const store = getUserDataStoreStub(env, userId);
+  return {
+    ...(await store.deleteOAuthToken(GOOGLE_PROVIDER)),
+    provider: GOOGLE_PROVIDER,
+    connected: false,
+  };
 }
 
 async function loadData(env, userId) {
@@ -995,13 +1395,20 @@ async function handleRequest(request, env) {
     url.pathname !== "/api/data" &&
     !url.pathname.startsWith("/api/auth/") &&
     !url.pathname.startsWith("/api/attachments") &&
-    url.pathname !== "/api/ai"
+    url.pathname !== "/api/ai" &&
+    !url.pathname.startsWith("/api/integrations/google/")
   ) {
     return jsonResponse(request, env, { ok: false, message: "Not found" }, 404);
   }
 
-  if (!isAuthorized(request, env, url)) {
+  const isGoogleOAuthCallback = url.pathname === "/api/integrations/google/callback";
+
+  if (!isGoogleOAuthCallback && !isAuthorized(request, env, url)) {
     return jsonResponse(request, env, { ok: false, message: "Unauthorized" }, 401);
+  }
+
+  if (isGoogleOAuthCallback && request.method === "GET") {
+    return handleGoogleOAuthCallback(request, env);
   }
 
   if (url.pathname === "/api/auth/register" && request.method === "POST") {
@@ -1031,6 +1438,22 @@ async function handleRequest(request, env) {
 
   const auth = await getAuthenticatedSession(request, env);
   const userId = normalizeUserId(auth.user.id);
+
+  if (url.pathname === "/api/integrations/google/start" && request.method === "GET") {
+    return jsonResponse(request, env, await startGoogleOAuth(env, request, userId));
+  }
+
+  if (url.pathname === "/api/integrations/google/status" && request.method === "GET") {
+    return jsonResponse(request, env, await getGoogleConnectionStatus(env, request, userId));
+  }
+
+  if (url.pathname === "/api/integrations/google/disconnect" && request.method === "POST") {
+    return jsonResponse(request, env, await disconnectGoogleCalendar(env, userId));
+  }
+
+  if (url.pathname === "/api/integrations/google/events" && request.method === "GET") {
+    return jsonResponse(request, env, await listGoogleEvents(env, request, userId));
+  }
 
   if (url.pathname === "/api/ai" && request.method === "POST") {
     return jsonResponse(request, env, await runWorkersAi(env, await request.json()));

@@ -3731,6 +3731,10 @@ textarea:focus {
   margin: 0;
 }
 
+.external-connection-message {
+  color: var(--danger) !important;
+}
+
 .external-connection-status {
   flex: 0 0 auto;
   padding: 4px 8px;
@@ -3776,6 +3780,31 @@ textarea:focus {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+.google-calendar-event-list {
+  display: grid;
+  gap: 7px;
+  padding-top: 2px;
+}
+
+.google-calendar-event {
+  display: grid;
+  gap: 3px;
+  padding: 8px 9px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-muted);
+}
+
+.google-calendar-event strong,
+.google-calendar-event span {
+  overflow-wrap: anywhere;
+}
+
+.google-calendar-event span {
+  color: var(--muted);
+  font-size: 11px;
 }
 
 @media (max-width: 820px) {

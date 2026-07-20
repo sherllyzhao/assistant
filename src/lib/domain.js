@@ -113,6 +113,8 @@ export const externalConnectionProviders = [
 export const externalConnectionStatuses = [
   { value: "consent-required", label: "待确认授权范围" },
   { value: "consent-granted", label: "已确认授权范围" },
+  { value: "connected", label: "已连接" },
+  { value: "sync-error", label: "同步失败" },
   { value: "revoked", label: "已撤销" },
 ];
 
