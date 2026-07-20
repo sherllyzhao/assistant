@@ -13,6 +13,7 @@ const defaultData = {
   tombstones: [],
   settings: {
     soundEnabled: true,
+    externalConnections: [],
   },
 };
 const PASSWORD_HASH_ITERATIONS = 100000;

@@ -47,6 +47,7 @@ import {
   createAttachment,
   createFollowUpDraft,
   createFollowUpLog,
+  createExternalConnection,
   createScheduleSuggestions,
   createTaskOrganizingSuggestions,
   createVaultPlaintext,
@@ -54,6 +55,8 @@ import {
   DEFAULT_FTP_CLIENT_PATH,
   emptyTaskDraft,
   emptyVaultDraft,
+  externalConnectionProviders,
+  externalConnectionStatuses,
   filterLogsByRange,
   formatDateTime,
   getDailyProgress,
@@ -76,6 +79,7 @@ import {
   normalizeFollowUpAt,
   normalizeFollowUpDraft,
   normalizeFollowUpNote,
+  normalizeExternalConnections,
   normalizeWaitingFor,
   normalizeDailySlotReminderRecords,
   normalizeDailyTarget,
@@ -90,6 +94,9 @@ import {
   shouldRemindTask,
   taskStatuses,
   toDateTimeInputValue,
+  grantExternalConnectionConsent,
+  revokeExternalConnection,
+  upsertExternalConnection,
   vaultCategories,
   workDomains,
 } from "./lib/domain.js";
@@ -149,6 +156,7 @@ const viewOptions = [
   { value: "tasks", label: "任务看板", description: "录入、筛选和推进待办" },
   { value: "assistant", label: "AI工作台", description: "询问今日、本周和项目进展" },
   { value: "memory", label: "长期记忆", description: "沉淀联系人、项目和排期习惯" },
+  { value: "connections", label: "外部连接", description: "管理授权范围和撤销记录" },
   { value: "vault", label: "安全速记", description: "保存账号、密码和密钥" },
   { value: "report", label: "工作日报", description: "查看日报概览与日志明细" },
   { value: "tools", label: "🛠️ 工具库", description: "查询和管理常用小工具" },
@@ -999,6 +1007,10 @@ function App() {
   const scheduleSuggestions = useMemo(
     () => createScheduleSuggestions(data.tasks, data.habits, currentTime),
     [currentTime, data.habits, data.tasks],
+  );
+  const externalConnections = useMemo(
+    () => normalizeExternalConnections(data.settings?.externalConnections),
+    [data.settings?.externalConnections],
   );
   const mobileFocusTasks = useMemo(() => getMobileFocusTasks(data.tasks, currentTime), [currentTime, data.tasks]);
   const detailTask = useMemo(
@@ -2315,6 +2327,42 @@ function App() {
     }));
   }
 
+  function addExternalConnection(provider) {
+    const connection = createExternalConnection(provider);
+
+    if (!connection) {
+      return;
+    }
+
+    setData((current) => ({
+      ...current,
+      settings: {
+        ...current.settings,
+        externalConnections: upsertExternalConnection(current.settings?.externalConnections, connection),
+      },
+    }));
+  }
+
+  function updateExternalConnection(connectionId, transform) {
+    setData((current) => ({
+      ...current,
+      settings: {
+        ...current.settings,
+        externalConnections: normalizeExternalConnections(current.settings?.externalConnections).map((connection) =>
+          connection.id === connectionId ? transform(connection) : connection,
+        ),
+      },
+    }));
+  }
+
+  function grantExternalConnection(connection) {
+    updateExternalConnection(connection.id, (current) => grantExternalConnectionConsent(current));
+  }
+
+  function revokeExternalConnectionRecord(connection) {
+    updateExternalConnection(connection.id, (current) => revokeExternalConnection(current));
+  }
+
   function updateAuthDraft(field, value) {
     setAuthDraft((current) => ({ ...current, [field]: value }));
   }
@@ -2573,7 +2621,7 @@ function App() {
         ))}
       </section>
 
-      <div className={`workspace-grid ${["profile", "vault", "memory"].includes(activeView) ? "profile-grid" : ""} ${isViewTransitioning ? "is-transitioning" : ""}`}>
+      <div className={`workspace-grid ${["profile", "vault", "memory", "connections"].includes(activeView) ? "profile-grid" : ""} ${isViewTransitioning ? "is-transitioning" : ""}`}>
         <section
           className="task-area"
           aria-label={
@@ -2583,11 +2631,13 @@ function App() {
                 ? "个人信息"
                 : activeView === "vault"
                   ? "安全速记"
-                  : activeView === "assistant"
-                    ? "AI工作台"
-                    : activeView === "memory"
-                      ? "长期记忆"
-                      : "工作日报"
+                  : activeView === "connections"
+                    ? "外部连接"
+                    : activeView === "assistant"
+                      ? "AI工作台"
+                      : activeView === "memory"
+                        ? "长期记忆"
+                        : "工作日报"
           }
         >
           {activeView === "tasks" ? (
@@ -2679,6 +2729,13 @@ function App() {
               status={passwordStatus}
               syncStatus={syncStatus}
             />
+          ) : activeView === "connections" ? (
+            <ExternalConnectionsPanel
+              connections={externalConnections}
+              onAdd={addExternalConnection}
+              onGrant={grantExternalConnection}
+              onRevoke={revokeExternalConnectionRecord}
+            />
           ) : activeView === "vault" ? (
             <VaultPanel
               categoryFilter={vaultCategoryFilter}
@@ -2762,7 +2819,7 @@ function App() {
           )}
         </section>
 
-        {["profile", "vault", "memory", "tools"].includes(activeView) ? null : (
+        {["profile", "vault", "memory", "connections", "tools"].includes(activeView) ? null : (
         <aside className="side-rail" aria-label="录入与候选任务">
           <section className="panel">
             <div className="panel-heading">
@@ -3186,6 +3243,97 @@ function App() {
         />
       ) : null}
     </main>
+  );
+}
+
+function ExternalConnectionsPanel({ connections = [], onAdd, onGrant, onRevoke }) {
+  const [selectedProvider, setSelectedProvider] = useState(externalConnectionProviders[0]?.value || "");
+
+  return (
+    <div className="external-connections-panel">
+      <div className="section-toolbar profile-toolbar">
+        <div>
+          <p className="eyebrow">External Access</p>
+          <h2>外部连接</h2>
+        </div>
+        <ShieldCheck size={20} />
+      </div>
+
+      <section className="external-connection-notice" role="status">
+        <ShieldCheck size={18} />
+        <p>当前版本只登记授权范围和撤销记录，不发起 OAuth、不读取第三方数据，也不保存 access token 或 refresh token。</p>
+      </section>
+
+      <section className="profile-card external-connection-register">
+        <div>
+          <strong>登记连接意向</strong>
+          <p className="profile-muted">先选择数据来源，确认后再进入后续 provider 接入评审。</p>
+        </div>
+        <div className="external-connection-register-actions">
+          <label>
+            数据来源
+            <select value={selectedProvider} onChange={(event) => setSelectedProvider(event.target.value)}>
+              {externalConnectionProviders.map((provider) => (
+                <option key={provider.value} value={provider.value}>
+                  {provider.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button className="primary-button" type="button" onClick={() => onAdd(selectedProvider)}>
+            <Plus size={17} />
+            登记授权范围
+          </button>
+        </div>
+      </section>
+
+      <div className="external-connection-grid">
+        {externalConnectionProviders.map((provider) => {
+          const connection = connections.find((item) => item.provider === provider.value);
+          const status = externalConnectionStatuses.find((item) => item.value === connection?.status);
+
+          return (
+            <article className="profile-card external-connection-card" key={provider.value}>
+              <div className="external-connection-card-heading">
+                <div>
+                  <strong>{provider.label}</strong>
+                  <span>{provider.category === "calendar" ? "日历" : provider.category === "mail" ? "邮件" : "消息"}</span>
+                </div>
+                <em className={`external-connection-status ${connection ? `is-${connection.status}` : "is-unregistered"}`}>
+                  {status?.label || "未登记"}
+                </em>
+              </div>
+              <p>{provider.purpose}</p>
+              <div className="external-connection-scopes">
+                {provider.scopes.map((scope) => <code key={scope}>{scope}</code>)}
+              </div>
+              {connection?.consentGrantedAt ? <small>确认于 {formatDateTime(connection.consentGrantedAt)}</small> : null}
+              {connection?.revokedAt ? <small>撤销于 {formatDateTime(connection.revokedAt)}</small> : null}
+              <div className="external-connection-actions">
+                {!connection || connection.status === "revoked" ? (
+                  <button className="secondary-button" type="button" onClick={() => onAdd(provider.value)}>
+                    <Plus size={16} />
+                    重新登记
+                  </button>
+                ) : null}
+                {connection?.status === "consent-required" ? (
+                  <button className="primary-button" type="button" onClick={() => onGrant(connection)}>
+                    <CheckCircle2 size={16} />
+                    我已确认范围
+                  </button>
+                ) : null}
+                {connection && connection.status !== "revoked" ? (
+                  <button className="secondary-button" type="button" onClick={() => onRevoke(connection)}>
+                    <X size={16} />
+                    撤销登记
+                  </button>
+                ) : null}
+              </div>
+            </article>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 

@@ -79,6 +79,43 @@ export const dailySlots = [
   { value: "evening", label: "晚上", startHour: 18, endHour: 24 },
 ];
 
+export const externalConnectionProviders = [
+  {
+    value: "google-calendar",
+    label: "Google Calendar",
+    category: "calendar",
+    purpose: "读取会议和截止日期",
+    scopes: ["calendar.readonly"],
+  },
+  {
+    value: "outlook-calendar",
+    label: "Outlook Calendar",
+    category: "calendar",
+    purpose: "读取会议和截止日期",
+    scopes: ["Calendars.Read"],
+  },
+  {
+    value: "gmail",
+    label: "Gmail",
+    category: "mail",
+    purpose: "读取邮件中的候选任务",
+    scopes: ["gmail.readonly"],
+  },
+  {
+    value: "wechat",
+    label: "微信新增消息",
+    category: "messages",
+    purpose: "分析用户主动导入的新增消息",
+    scopes: ["本地导入"],
+  },
+];
+
+export const externalConnectionStatuses = [
+  { value: "consent-required", label: "待确认授权范围" },
+  { value: "consent-granted", label: "已确认授权范围" },
+  { value: "revoked", label: "已撤销" },
+];
+
 const maxDailySlotReminderRecords = 120;
 const staleTaskThresholdDays = 14;
 const mergeableSimilarityThreshold = 0.72;
@@ -813,6 +850,151 @@ export function normalizeFollowUpNote(value) {
 
 export function normalizeFollowUpDraft(value) {
   return String(value || "").trim().slice(0, 2000);
+}
+
+function normalizeExternalTimestamp(value) {
+  const time = getFiniteTime(value);
+  return Number.isFinite(time) && time > 0 ? new Date(time).toISOString() : "";
+}
+
+function getExternalConnectionProvider(value) {
+  return externalConnectionProviders.find((provider) => provider.value === value) || null;
+}
+
+export function normalizeExternalConnection(value) {
+  const provider = getExternalConnectionProvider(value?.provider);
+
+  if (!provider) {
+    return null;
+  }
+
+  const status = externalConnectionStatuses.some((item) => item.value === value?.status)
+    ? value.status
+    : "consent-required";
+  const scopes = Array.isArray(value?.scopes)
+    ? value.scopes.filter((scope) => provider.scopes.includes(scope))
+    : [];
+
+  return {
+    id: String(value?.id || createId("connection")).trim().slice(0, 120),
+    provider: provider.value,
+    label: provider.label,
+    category: provider.category,
+    purpose: provider.purpose,
+    scopes: scopes.length > 0 ? scopes : [...provider.scopes],
+    status,
+    consentGrantedAt: normalizeExternalTimestamp(value?.consentGrantedAt),
+    revokedAt: normalizeExternalTimestamp(value?.revokedAt),
+    lastSyncAt: normalizeExternalTimestamp(value?.lastSyncAt),
+    lastErrorCode: /^[A-Z0-9:_-]{1,80}$/i.test(String(value?.lastErrorCode || "").trim())
+      ? String(value.lastErrorCode).trim()
+      : "",
+    createdAt: normalizeExternalTimestamp(value?.createdAt),
+    updatedAt: normalizeExternalTimestamp(value?.updatedAt),
+  };
+}
+
+export function normalizeExternalConnections(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const byProvider = new Map();
+
+  for (const item of value) {
+    const normalized = normalizeExternalConnection(item);
+
+    if (!normalized) {
+      continue;
+    }
+
+    const existing = byProvider.get(normalized.provider);
+    const currentTime = getFiniteTime(normalized.updatedAt || normalized.createdAt);
+    const existingTime = getFiniteTime(existing?.updatedAt || existing?.createdAt);
+
+    if (!existing || currentTime >= existingTime) {
+      byProvider.set(normalized.provider, normalized);
+    }
+  }
+
+  return [...byProvider.values()];
+}
+
+export function createExternalConnection(providerValue, now = new Date()) {
+  const provider = getExternalConnectionProvider(providerValue);
+
+  if (!provider) {
+    return null;
+  }
+
+  const timestamp = now.toISOString();
+  return {
+    id: createId("connection"),
+    provider: provider.value,
+    label: provider.label,
+    category: provider.category,
+    purpose: provider.purpose,
+    scopes: [...provider.scopes],
+    status: "consent-required",
+    consentGrantedAt: "",
+    revokedAt: "",
+    lastSyncAt: "",
+    lastErrorCode: "",
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  };
+}
+
+export function upsertExternalConnection(connections, connection) {
+  const nextConnection = normalizeExternalConnection(connection);
+
+  if (!nextConnection) {
+    return normalizeExternalConnections(connections);
+  }
+
+  const current = normalizeExternalConnections(connections);
+  const existingIndex = current.findIndex((item) => item.provider === nextConnection.provider);
+
+  if (existingIndex < 0) {
+    return [...current, nextConnection];
+  }
+
+  const next = current.slice();
+  next[existingIndex] = nextConnection;
+  return next;
+}
+
+export function grantExternalConnectionConsent(connection, now = new Date()) {
+  const normalized = normalizeExternalConnection(connection);
+
+  if (!normalized) {
+    return null;
+  }
+
+  const timestamp = now.toISOString();
+  return {
+    ...normalized,
+    status: "consent-granted",
+    consentGrantedAt: timestamp,
+    revokedAt: "",
+    updatedAt: timestamp,
+  };
+}
+
+export function revokeExternalConnection(connection, now = new Date()) {
+  const normalized = normalizeExternalConnection(connection);
+
+  if (!normalized) {
+    return null;
+  }
+
+  const timestamp = now.toISOString();
+  return {
+    ...normalized,
+    status: "revoked",
+    revokedAt: timestamp,
+    updatedAt: timestamp,
+  };
 }
 
 export function getSlotMeta(value) {

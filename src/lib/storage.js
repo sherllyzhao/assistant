@@ -32,6 +32,7 @@ export const initialData = {
   settings: {
     soundEnabled: true,
     ftpClientPath: DEFAULT_FTP_CLIENT_PATH,
+    externalConnections: [],
   },
 };
 
