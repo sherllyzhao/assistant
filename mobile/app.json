@@ -1,0 +1,30 @@
+{
+  "expo": {
+    "name": "Sherlly Assistant",
+    "slug": "sherlly-assistant",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "scheme": "sherlly",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.sherlly.assistant.mobile",
+      "infoPlist": {
+        "NSCalendarsUsageDescription": "Sherlly 需要访问手机日历，才能把任务直接加入你的日程。",
+        "NSUserNotificationsUsageDescription": "Sherlly 需要发送任务提醒，避免重要事项被遗漏。"
+      }
+    },
+    "android": {
+      "package": "com.sherlly.assistant.mobile",
+      "permissions": ["READ_CALENDAR", "WRITE_CALENDAR", "POST_NOTIFICATIONS"]
+    },
+    "plugins": [
+      "expo-calendar",
+      "expo-notifications",
+      "expo-secure-store"
+    ],
+    "extra": {
+      "apiUrl": ""
+    }
+  }
+}

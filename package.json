@@ -12,6 +12,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 5188",
+    "mobile:start": "pnpm --dir mobile start",
+    "mobile:doctor": "pnpm --dir mobile doctor",
     "server": "node server/index.cjs",
     "start": "node server/index.cjs",
     "desktop": "node scripts/start-desktop.cjs",
