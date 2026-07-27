@@ -7,6 +7,7 @@ const DEVICE_ID_KEY = "sherlly.mobile.device-id.v1";
 const apiUrl = String(process.env.EXPO_PUBLIC_API_URL || Constants.expoConfig?.extra?.apiUrl || "")
   .trim()
   .replace(/\/$/, "");
+const apiToken = String(process.env.EXPO_PUBLIC_API_TOKEN || Constants.expoConfig?.extra?.apiToken || "").trim();
 
 function requireApiUrl() {
   if (!apiUrl) {
@@ -35,6 +36,10 @@ async function request(path, options = {}) {
     ...(options.body ? { "Content-Type": "application/json" } : {}),
     ...(options.headers || {}),
   };
+
+  if (apiToken) {
+    headers["X-Sherlly-Token"] = apiToken;
+  }
 
   if (auth?.token) {
     headers.Authorization = `Bearer ${auth.token}`;
@@ -78,8 +83,20 @@ export async function register(username, password, displayName) {
   return saveStoredAuth(auth);
 }
 
+function unwrapEnvelope(value) {
+  if (value?.envelope && typeof value.envelope === "object") {
+    return value.envelope;
+  }
+
+  if (value?.data?.data && typeof value.data.data === "object") {
+    return value.data;
+  }
+
+  return value;
+}
+
 export async function loadCurrentData() {
-  return normalizeSyncEnvelope(await request("/api/data"));
+  return normalizeSyncEnvelope(unwrapEnvelope(await request("/api/data")));
 }
 
 export async function saveCurrentData(data, baseRevision) {
@@ -93,7 +110,7 @@ export async function saveCurrentData(data, baseRevision) {
     }),
   });
 
-  return normalizeSyncEnvelope(envelope);
+  return normalizeSyncEnvelope(unwrapEnvelope(envelope));
 }
 
 export { getStoredAuth };

@@ -16,7 +16,13 @@
     },
     "android": {
       "package": "com.sherlly.assistant.mobile",
-      "permissions": ["READ_CALENDAR", "WRITE_CALENDAR", "POST_NOTIFICATIONS"]
+      "permissions": [
+        "READ_CALENDAR",
+        "WRITE_CALENDAR",
+        "POST_NOTIFICATIONS",
+        "android.permission.READ_CALENDAR",
+        "android.permission.WRITE_CALENDAR"
+      ]
     },
     "plugins": [
       "expo-calendar",
@@ -24,7 +30,11 @@
       "expo-secure-store"
     ],
     "extra": {
-      "apiUrl": ""
-    }
+      "apiUrl": "",
+      "eas": {
+        "projectId": "0562e813-2c1f-4fe3-a0b3-3775101a268d"
+      }
+    },
+    "owner": "sherllyzhao"
   }
 }

@@ -7,7 +7,9 @@
 
 ## 配置
 
-复制 `.env.example` 为 `.env`，将 `EXPO_PUBLIC_API_URL` 设置为 Cloudflare Worker 的 HTTPS 地址。
+复制 `.env.example` 为 `.env`，将 `EXPO_PUBLIC_API_URL` 设置为 Cloudflare Worker 的 HTTPS 地址，并设置 `EXPO_PUBLIC_API_TOKEN`。
+
+`EXPO_PUBLIC_API_TOKEN` 是后台 API 门禁 token；它必须与 Worker 的 `SHERLLY_API_TOKEN` 一致，否则登录会返回 `Unauthorized`。不要把真实 token 提交到 Git。
 
 ```powershell
 cd mobile

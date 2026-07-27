@@ -139,6 +139,32 @@ export class SherllyUserData {
     return envelope;
   }
 
+  async migrateLegacy(data) {
+    const existing = this.readCurrent();
+    const existingData = normalizeSyncData(existing?.data);
+    const hasExistingData = [
+      "tasks",
+      "candidates",
+      "logs",
+      "vaultItems",
+      "tools",
+      "habits",
+      "vaultCandidates",
+      "tombstones",
+    ].some((collection) => existingData[collection].length > 0);
+
+    if (existing && (existing.revision !== 0 || hasExistingData)) {
+      return existing;
+    }
+
+    const envelope = await createSyncEnvelope(data, {
+      revision: existing?.revision || 0,
+      deviceId: "legacy-kv",
+    });
+    this.saveCurrent(envelope);
+    return envelope;
+  }
+
   async write(payload) {
     const baseRevision = Number(payload?.baseRevision);
     const schemaVersion = Number(payload?.schemaVersion);

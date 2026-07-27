@@ -807,17 +807,38 @@ async function disconnectGoogleCalendar(env, userId) {
   };
 }
 
+function parseLegacyData(stored) {
+  if (!stored) {
+    return normalizeSyncData(defaultData);
+  }
+
+  try {
+    const document = JSON.parse(stored);
+    const data = document?.data && typeof document.data === "object" ? document.data : document;
+    return normalizeSyncData(data || defaultData);
+  } catch {
+    return normalizeSyncData(defaultData);
+  }
+}
+
 async function loadData(env, userId) {
   const store = getUserDataStoreStub(env, userId);
   const current = await store.read();
+  const stored = await env.SHERLLY_DATA?.get?.(getStorageKey(userId));
+  const legacyData = parseLegacyData(stored);
 
   if (current) {
+    // A previous deployment could create an empty Durable Object before the KV
+    // migration ran. Recover meaningful legacy data only from that untouched
+    // revision-0 state; never overwrite later user changes.
+    if (current.revision === 0 && !hasMeaningfulData(current.data) && hasMeaningfulData(legacyData)) {
+      return store.migrateLegacy(legacyData);
+    }
+
     return current;
   }
 
-  const stored = await env.SHERLLY_DATA.get(getStorageKey(userId));
-  const legacyDocument = stored ? JSON.parse(stored) : null;
-  return store.initializeLegacy(normalizeSyncData(legacyDocument?.data || defaultData));
+  return store.initializeLegacy(legacyData);
 }
 
 async function saveData(env, userId, payload) {

@@ -6,7 +6,6 @@ import {
   KeyboardAvoidingView,
   Platform,
   Pressable,
-  SafeAreaView,
   ScrollView,
   StatusBar,
   StyleSheet,
@@ -15,6 +14,7 @@ import {
   TextInput,
   View,
 } from "react-native";
+import { SafeAreaProvider, SafeAreaView as ContextSafeAreaView } from "react-native-safe-area-context";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import * as Calendar from "expo-calendar";
 import * as Notifications from "expo-notifications";
@@ -44,6 +44,14 @@ function getTaskSortTime(task) {
 }
 
 export default function App() {
+  return (
+    <SafeAreaProvider>
+      <AppContent />
+    </SafeAreaProvider>
+  );
+}
+
+function AppContent() {
   const [auth, setAuth] = useState(null);
   const [data, setData] = useState(emptyData);
   const [revision, setRevision] = useState(0);
@@ -166,8 +174,8 @@ export default function App() {
   }
 
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <StatusBar barStyle="dark-content" />
+    <ContextSafeAreaView style={styles.safeArea}>
+      <StatusBar barStyle="dark-content" backgroundColor={colors.bg} translucent={false} />
       <View style={styles.appHeader}>
         <View>
           <Text style={styles.brand}>Sherlly</Text>
@@ -230,12 +238,12 @@ export default function App() {
           onSave={handleSaveTask}
         />
       ) : null}
-    </SafeAreaView>
+    </ContextSafeAreaView>
   );
 }
 
 function LoadingView() {
-  return <View style={styles.loading}><ActivityIndicator size="large" color={colors.accent} /><Text style={styles.muted}>正在打开 Sherlly…</Text></View>;
+  return <ContextSafeAreaView style={styles.loading}><ActivityIndicator size="large" color={colors.accent} /><Text style={styles.muted}>正在打开 Sherlly…</Text></ContextSafeAreaView>;
 }
 
 function Notice({ text }) {
@@ -249,7 +257,7 @@ function AuthScreen({ busy, message, onSubmit }) {
   const [displayName, setDisplayName] = useState("");
 
   return (
-    <SafeAreaView style={styles.safeArea}>
+    <ContextSafeAreaView style={styles.safeArea}>
       <KeyboardAvoidingView style={styles.authWrap} behavior={Platform.OS === "ios" ? "padding" : undefined}>
         <View style={styles.authCard}>
           <Text style={styles.authLogo}>Sherlly</Text>
@@ -267,7 +275,7 @@ function AuthScreen({ busy, message, onSubmit }) {
           </Pressable>
         </View>
       </KeyboardAvoidingView>
-    </SafeAreaView>
+    </ContextSafeAreaView>
   );
 }
 
