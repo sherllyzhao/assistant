@@ -21,17 +21,17 @@ function getEventDetails(task) {
 }
 
 export async function requestCalendarPermission() {
-  const current = await Calendar.getCalendarPermissionsAsync();
+  const current = await Calendar.getCalendarPermissions();
 
   if (current.granted) {
     return current;
   }
 
-  return Calendar.requestCalendarPermissionsAsync();
+  return Calendar.requestCalendarPermissions();
 }
 
 async function getWritableCalendar() {
-  const calendars = await Calendar.getCalendarsAsync(Calendar.EntityTypes.EVENT);
+  const calendars = await Calendar.getCalendars(Calendar.EntityTypes.EVENT);
   const writable = calendars.find((calendar) => calendar.allowsModifications !== false);
 
   if (!writable) {
@@ -55,18 +55,22 @@ export async function addTaskToCalendar(task) {
   if (stored) {
     try {
       const mapping = JSON.parse(stored);
-      eventId = mapping.eventId || "";
-      if (eventId) {
-        await Calendar.updateEventAsync(eventId, details);
+      const storedEventId = mapping.eventId || "";
+      if (storedEventId) {
+        const event = await Calendar.ExpoCalendarEvent.get(storedEventId);
+        await event.update(details);
+        eventId = storedEventId;
       }
     } catch {
+      // 已映射的事件可能被用户在系统日历中删除，改为重新创建。
       eventId = "";
     }
   }
 
   if (!eventId) {
     const calendar = await getWritableCalendar();
-    eventId = await Calendar.createEventAsync(calendar.id, details);
+    const event = await calendar.createEvent(details);
+    eventId = event.id;
     await AsyncStorage.setItem(getEventKey(task.id), JSON.stringify({
       eventId,
       calendarId: calendar.id,
@@ -86,7 +90,8 @@ export async function removeTaskFromCalendar(taskId) {
   try {
     const mapping = JSON.parse(stored);
     if (mapping.eventId) {
-      await Calendar.deleteEventAsync(mapping.eventId);
+      const event = await Calendar.ExpoCalendarEvent.get(mapping.eventId);
+      await event.delete();
     }
   } finally {
     await AsyncStorage.removeItem(getEventKey(taskId));

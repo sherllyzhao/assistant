@@ -16,10 +16,9 @@ import {
 } from "react-native";
 import { SafeAreaProvider, SafeAreaView as ContextSafeAreaView } from "react-native-safe-area-context";
 import DateTimePicker from "@react-native-community/datetimepicker";
-import * as Calendar from "expo-calendar";
 import * as Notifications from "expo-notifications";
 import { createTask, getPriorityMeta, getTaskReminderWindow, isActiveTask, normalizeSyncData, priorities } from "./src/lib/shared.js";
-import { addTaskToCalendar } from "./src/lib/calendar.js";
+import { addTaskToCalendar, requestCalendarPermission } from "./src/lib/calendar.js";
 import { getStoredAuth, login, register } from "./src/lib/api.js";
 import { clearStoredAuth } from "./src/lib/authStorage.js";
 import { configureNotificationChannel, requestNotificationPermission, scheduleTaskNotifications } from "./src/lib/notifications.js";
@@ -210,7 +209,7 @@ function AppContent() {
               Alert.alert("通知权限", permission.granted ? "已允许任务提醒" : "通知权限未开启");
             }}
             onCalendar={async () => {
-              const permission = await Calendar.requestCalendarPermissionsAsync();
+              const permission = await requestCalendarPermission();
               Alert.alert("日历权限", permission.granted ? "已允许写入手机日历" : "日历权限未开启");
             }}
             onLogout={async () => {
