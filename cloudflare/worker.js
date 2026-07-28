@@ -368,24 +368,6 @@ function getBearerToken(request) {
   return "";
 }
 
-function getRequestToken(request, url, env) {
-  const directToken = String(request.headers.get("X-Sherlly-Token") || url.searchParams.get("token") || "").trim();
-
-  if (directToken) {
-    return directToken;
-  }
-
-  const bearerToken = getBearerToken(request);
-  const expectedToken = String(env.SHERLLY_API_TOKEN || "").trim();
-  return bearerToken === expectedToken ? bearerToken : "";
-}
-
-function isAuthorized(request, env, url) {
-  const expectedToken = String(env.SHERLLY_API_TOKEN || "").trim();
-
-  return !expectedToken || getRequestToken(request, url, env) === expectedToken;
-}
-
 function getClientIp(request) {
   return String(request.headers.get("CF-Connecting-IP") || request.headers.get("X-Forwarded-For") || "")
     .split(",")[0]
@@ -1424,10 +1406,8 @@ async function handleRequest(request, env) {
 
   const isGoogleOAuthCallback = url.pathname === "/api/integrations/google/callback";
 
-  if (!isGoogleOAuthCallback && !isAuthorized(request, env, url)) {
-    return jsonResponse(request, env, { ok: false, message: "Unauthorized" }, 401);
-  }
-
+  // 注册、登录和 OAuth 回调是公开入口；其余用户接口由下方的 session 校验保护。
+  // SHERLLY_API_TOKEN 仅保留为兼容配置，不作为普通客户端请求的硬门槛。
   if (isGoogleOAuthCallback && request.method === "GET") {
     return handleGoogleOAuthCallback(request, env);
   }
