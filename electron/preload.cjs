@@ -14,6 +14,17 @@ contextBridge.exposeInMainWorld("sherlly", {
   checkForUpdates: () => ipcRenderer.invoke("sherlly:check-for-updates"),
   downloadUpdate: () => ipcRenderer.invoke("sherlly:download-update"),
   installUpdate: () => ipcRenderer.invoke("sherlly:install-update"),
+  setClipboardCapture: (enabled) => ipcRenderer.invoke("sherlly:set-clipboard-capture", enabled),
+  suppressClipboardCapture: () => ipcRenderer.invoke("sherlly:suppress-clipboard-capture"),
+  onClipboardCaptured: (callback) => {
+    if (typeof callback !== "function") {
+      return () => {};
+    }
+
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on("sherlly:clipboard-captured", listener);
+    return () => ipcRenderer.removeListener("sherlly:clipboard-captured", listener);
+  },
   onUpdateStatus: (callback) => {
     if (typeof callback !== "function") {
       return () => {};

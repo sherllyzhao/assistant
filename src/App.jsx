@@ -31,6 +31,8 @@ import {
   Wand2,
   Volume2,
   VolumeX,
+  ClipboardCheck,
+  ClipboardX,
   X,
 } from "lucide-react";
 import {
@@ -40,6 +42,7 @@ import {
   createAiWorkspaceAnswer,
   createTask,
   createId,
+  createClipboardCandidates,
   dailySlots,
   detectCandidatesFromText,
   detectVaultCandidatesFromText,
@@ -702,6 +705,48 @@ function App() {
       unsubscribeQuickCapture?.();
     };
   }, [editingId]);
+
+  useEffect(() => {
+    const unsubscribeClipboardCapture = window.sherlly?.onClipboardCaptured?.((payload) => {
+      const { candidates, vaultCandidates } = createClipboardCandidates(payload || {});
+
+      if (candidates.length === 0 && vaultCandidates.length === 0) {
+        if (payload?.imageTooLarge) {
+          notifyWithFallback({
+            title: "剪贴板图片过大",
+            body: "图片超过 2MB 限制，未能加入候选，请手动截图缩小后重试。",
+            sound: false,
+            flash: false,
+          });
+        }
+        return;
+      }
+
+      setData((current) => ({
+        ...current,
+        candidates: [...candidates, ...current.candidates],
+        vaultCandidates: [...vaultCandidates, ...current.vaultCandidates],
+      }));
+      notifyWithFallback({
+        title: "已捕获剪贴板内容",
+        body: `新增 ${candidates.length} 条候选待确认${payload?.imageTooLarge ? "（图片超限已跳过）" : ""}。`,
+        sound: false,
+        flash: false,
+      });
+    });
+
+    return () => {
+      unsubscribeClipboardCapture?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isLoaded) {
+      return;
+    }
+
+    window.sherlly?.setClipboardCapture?.(Boolean(data.settings.clipboardCaptureEnabled));
+  }, [isLoaded, data.settings.clipboardCaptureEnabled]);
 
   useEffect(() => {
     if (!isLoaded) {
@@ -1721,6 +1766,7 @@ function App() {
     }
 
     try {
+      await window.sherlly?.suppressClipboardCapture?.();
       await navigator.clipboard.writeText(value);
       const now = new Date();
       setData((current) => ({
@@ -1729,7 +1775,9 @@ function App() {
       }));
       setVaultStatus({ type: "success", message: `${label}已复制，30 秒后会尝试清空剪贴板。` });
       window.setTimeout(() => {
-        navigator.clipboard?.writeText?.("").catch(() => {});
+        Promise.resolve(window.sherlly?.suppressClipboardCapture?.()).finally(() => {
+          navigator.clipboard?.writeText?.("").catch(() => {});
+        });
       }, 30 * 1000);
     } catch (error) {
       setVaultStatus({ type: "error", message: error.message || "复制失败，当前环境可能不允许访问剪贴板。" });
@@ -2359,6 +2407,21 @@ function App() {
     }));
   }
 
+  function toggleClipboardCapture() {
+    if (!window.sherlly?.setClipboardCapture) {
+      setSyncError("剪贴板捕获仅支持 Windows 桌面端。");
+      return;
+    }
+
+    setData((current) => ({
+      ...current,
+      settings: {
+        ...current.settings,
+        clipboardCaptureEnabled: !current.settings.clipboardCaptureEnabled,
+      },
+    }));
+  }
+
   function addExternalConnection(provider) {
     const connection = createExternalConnection(provider);
 
@@ -2620,6 +2683,14 @@ function App() {
           ) : null}
           <button className="icon-button" type="button" onClick={toggleSound} title="切换声音提醒">
             {data.settings.soundEnabled ? <Volume2 size={18} /> : <VolumeX size={18} />}
+          </button>
+          <button
+            className="icon-button"
+            type="button"
+            onClick={toggleClipboardCapture}
+            title={data.settings.clipboardCaptureEnabled ? "关闭剪贴板捕获（复制内容自动进候选池）" : "开启剪贴板捕获（复制内容自动进候选池，仅桌面端）"}
+          >
+            {data.settings.clipboardCaptureEnabled ? <ClipboardCheck size={18} /> : <ClipboardX size={18} />}
           </button>
           <button className="primary-button" type="button" onClick={() => activateQuickCapture("手动录入")}>
             <Plus size={18} />
@@ -3287,6 +3358,16 @@ function App() {
                 data.candidates.map((candidate) => (
                   <article className="candidate-item" key={candidate.id}>
                     <p>{candidate.text}</p>
+                    {(candidate.attachments || [])
+                      .filter((attachment) => attachment.type === "image" && attachment.path.startsWith("data:image/"))
+                      .map((attachment) => (
+                        <img
+                          key={attachment.id}
+                          src={attachment.path}
+                          alt={attachment.name}
+                          style={{ maxWidth: "180px", maxHeight: "120px", borderRadius: "8px", objectFit: "cover" }}
+                        />
+                      ))}
                     <span>{formatDateTime(candidate.detectedAt)}</span>
                     <div className="candidate-actions">
                       <button type="button" onClick={() => confirmCandidate(candidate)}>

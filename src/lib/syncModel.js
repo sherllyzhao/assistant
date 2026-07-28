@@ -16,6 +16,7 @@ export const DEFAULT_SYNC_DATA = Object.freeze({
   tombstones: [],
   settings: {
     soundEnabled: true,
+    clipboardCaptureEnabled: false,
     externalConnections: [],
   },
 });

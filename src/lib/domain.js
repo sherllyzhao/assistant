@@ -1108,13 +1108,17 @@ export function createTask(draft, now = new Date()) {
   };
 }
 
-export function createCandidate(text, source = "微信粘贴", now = new Date()) {
+const TASK_KEYWORD_PATTERN = /(安排|提醒|记得|处理|确认|跟进|发送|发|提交|截止|今天|明天|周|月底|报价|合同|开会)/;
+const SENSITIVE_CONTENT_PATTERN = /(密码|口令|密钥|token|secret|api[_ -]?key|private[_ -]?key)/i;
+
+export function createCandidate(text, source = "微信粘贴", now = new Date(), attachments = []) {
   return {
     id: createId("candidate"),
     text: text.trim(),
     source,
     detectedAt: now.toISOString(),
     remindedAt: "",
+    attachments: normalizeAttachments(attachments),
   };
 }
 
@@ -1123,10 +1127,9 @@ export function detectVaultCandidatesFromText(value, source = "文本粘贴", no
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean);
-  const sensitivePattern = /(密码|口令|密钥|token|secret|api[_ -]?key|private[_ -]?key)/i;
 
   return lines
-    .filter((line) => sensitivePattern.test(line))
+    .filter((line) => SENSITIVE_CONTENT_PATTERN.test(line))
     .slice(0, 5)
     .map((line) => ({
       id: createId("vault-candidate"),
@@ -1418,14 +1421,13 @@ export function shouldRemindCandidate(candidate, now = new Date()) {
 }
 
 export function detectCandidatesFromText(text) {
-  const keywords = /(安排|提醒|记得|处理|确认|跟进|发送|发|提交|截止|今天|明天|周|月底|报价|合同|开会)/;
   const lines = String(text || "")
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean);
 
   const candidates = lines
-    .filter((line) => keywords.test(line))
+    .filter((line) => TASK_KEYWORD_PATTERN.test(line))
     .slice(0, 20)
     .map((line) => createCandidate(line));
 
@@ -1437,6 +1439,47 @@ export function detectCandidatesFromText(text) {
   return compactText ? [createCandidate(compactText)] : [];
 }
 
+export function createClipboardCandidates({ text = "", imageDataUrl = "", imageName = "" } = {}, now = new Date()) {
+  const source = "剪贴板捕获";
+  const compactText = String(text || "").trim();
+  const lines = compactText
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const safeLines = lines.filter((line) => !SENSITIVE_CONTENT_PATTERN.test(line));
+
+  const candidates = safeLines
+    .filter((line) => TASK_KEYWORD_PATTERN.test(line))
+    .slice(0, 20)
+    .map((line) => createCandidate(line, source, now));
+
+  const hasImage = String(imageDataUrl || "").startsWith("data:image/");
+
+  if (hasImage && candidates.length === 0) {
+    const fallbackText = safeLines.join(" ").trim() || "剪贴板图片";
+    candidates.push(createCandidate(fallbackText, source, now));
+  }
+
+  if (hasImage && candidates.length > 0) {
+    candidates[0] = {
+      ...candidates[0],
+      attachments: normalizeAttachments([
+        {
+          name: String(imageName || "").trim() || `剪贴板图片-${now.toISOString().replace(/[:.]/g, "-").slice(0, 19)}.png`,
+          path: imageDataUrl,
+          type: "image",
+          addedAt: now.toISOString(),
+        },
+      ]),
+    };
+  }
+
+  return {
+    candidates,
+    vaultCandidates: detectVaultCandidatesFromText(compactText, source, now),
+  };
+}
+
 export function candidateToDraft(candidate) {
   const detectedAt = new Date(candidate.detectedAt || Date.now());
   const now = isValidDate(detectedAt) ? detectedAt : new Date();
@@ -1446,6 +1489,7 @@ export function candidateToDraft(candidate) {
     title: candidate.text.replace(/^[^：:]{1,12}[：:]\s*/, "").slice(0, 60),
     source: candidate.source,
     note: candidate.text,
+    attachments: normalizeAttachments(candidate.attachments),
   }, now);
 }
 

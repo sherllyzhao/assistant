@@ -1,6 +1,7 @@
 const {
   app,
   BrowserWindow,
+  clipboard,
   dialog,
   globalShortcut,
   ipcMain,
@@ -15,7 +16,7 @@ const { autoUpdater } = require("electron-updater");
 const childProcess = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
-const { randomBytes } = require("node:crypto");
+const { createHash, randomBytes } = require("node:crypto");
 
 const APP_NAME = "Sherlly Assistant";
 const APP_USER_MODEL_ID = "com.sherlly.assistant";
@@ -55,8 +56,16 @@ const defaultData = {
   tombstones: [],
   settings: {
     soundEnabled: true,
+    clipboardCaptureEnabled: false,
   },
 };
+
+const CLIPBOARD_POLL_INTERVAL_MS = 1500;
+const CLIPBOARD_SUPPRESS_DURATION_MS = 3000;
+const CLIPBOARD_IMAGE_MAX_BYTES = 2 * 1024 * 1024;
+let clipboardPollTimer = null;
+let lastClipboardSignature = "";
+let clipboardSuppressUntil = 0;
 
 function getDataPath() {
   return path.join(app.getPath("userData"), DATA_FILE_NAME);
@@ -884,6 +893,101 @@ async function openAttachment(filePath) {
   return errorMessage ? { ok: false, message: errorMessage } : { ok: true };
 }
 
+function suppressClipboardCapture() {
+  clipboardSuppressUntil = Date.now() + CLIPBOARD_SUPPRESS_DURATION_MS;
+  return true;
+}
+
+function readClipboardImagePng() {
+  const image = clipboard.readImage();
+
+  if (!image || image.isEmpty()) {
+    return { image: null, pngBuffer: null };
+  }
+
+  return { image, pngBuffer: image.toPNG() };
+}
+
+function convertImageToDataUrl(image, pngBuffer) {
+  let buffer = pngBuffer;
+  let mimeType = "image/png";
+
+  if (buffer.length > CLIPBOARD_IMAGE_MAX_BYTES) {
+    buffer = image.toJPEG(80);
+    mimeType = "image/jpeg";
+  }
+
+  if (buffer.length > CLIPBOARD_IMAGE_MAX_BYTES) {
+    return { dataUrl: "", tooLarge: true };
+  }
+
+  return { dataUrl: `data:${mimeType};base64,${buffer.toString("base64")}`, tooLarge: false };
+}
+
+function computeClipboardSignature(text, pngBuffer) {
+  const hash = createHash("sha256");
+  hash.update(text || "");
+  hash.update("|");
+
+  if (pngBuffer) {
+    hash.update(pngBuffer.subarray(0, 4096));
+    hash.update(String(pngBuffer.length));
+  }
+
+  return hash.digest("hex");
+}
+
+function pollClipboard({ initial = false } = {}) {
+  const suppressed = Date.now() < clipboardSuppressUntil;
+  const text = String(clipboard.readText() || "").trim();
+  const { image, pngBuffer } = readClipboardImagePng();
+
+  if (!text && !pngBuffer) {
+    return;
+  }
+
+  const signature = computeClipboardSignature(text, pngBuffer);
+
+  if (signature === lastClipboardSignature) {
+    return;
+  }
+
+  lastClipboardSignature = signature;
+
+  if (initial || suppressed) {
+    return;
+  }
+
+  const { dataUrl: imageDataUrl, tooLarge: imageTooLarge } = image
+    ? convertImageToDataUrl(image, pngBuffer)
+    : { dataUrl: "", tooLarge: false };
+
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send("sherlly:clipboard-captured", {
+      text,
+      imageDataUrl,
+      imageTooLarge,
+      capturedAt: new Date().toISOString(),
+    });
+  }
+}
+
+function setClipboardCapture(enabled) {
+  if (clipboardPollTimer) {
+    clearInterval(clipboardPollTimer);
+    clipboardPollTimer = null;
+  }
+
+  if (!enabled) {
+    return { ok: true, enabled: false };
+  }
+
+  lastClipboardSignature = "";
+  pollClipboard({ initial: true });
+  clipboardPollTimer = setInterval(() => pollClipboard(), CLIPBOARD_POLL_INTERVAL_MS);
+  return { ok: true, enabled: true };
+}
+
 app.setName(APP_NAME);
 app.setAppUserModelId(APP_USER_MODEL_ID);
 Menu.setApplicationMenu(null);
@@ -912,6 +1016,8 @@ app.whenReady().then(() => {
   ipcMain.handle("sherlly:select-attachments", () => selectAttachments());
   ipcMain.handle("sherlly:get-attachment-preview", (_event, attachment) => getAttachmentPreview(attachment));
   ipcMain.handle("sherlly:open-attachment", (_event, filePath) => openAttachment(filePath));
+  ipcMain.handle("sherlly:set-clipboard-capture", (_event, enabled) => setClipboardCapture(Boolean(enabled)));
+  ipcMain.handle("sherlly:suppress-clipboard-capture", () => suppressClipboardCapture());
   ipcMain.handle("sherlly:get-update-status", () => getUpdateStatusSnapshot());
   ipcMain.handle("sherlly:check-for-updates", () => checkForUpdates());
   ipcMain.handle("sherlly:download-update", () => downloadUpdate());
@@ -943,4 +1049,9 @@ app.on("window-all-closed", () => {
 app.on("will-quit", () => {
   stopTrayFlash();
   globalShortcut.unregister(QUICK_CAPTURE_SHORTCUT);
+
+  if (clipboardPollTimer) {
+    clearInterval(clipboardPollTimer);
+    clipboardPollTimer = null;
+  }
 });
