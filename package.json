@@ -1,7 +1,7 @@
 {
   "name": "sherlly-assistant",
   "productName": "Sherlly Assistant",
-  "version": "3.0.0",
+  "version": "3.1.0",
   "private": true,
   "description": "Sherlly Assistant keeps work items from WeChat and manual notes inside a visible task loop.",
   "repository": {

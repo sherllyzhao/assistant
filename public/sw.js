@@ -1,4 +1,4 @@
-const CACHE_NAME = "sherlly-pwa-v1";
+const CACHE_NAME = "sherlly-pwa-v2";
 const APP_SHELL = ["/", "/index.html", "/favicon.png", "/manifest.webmanifest"];
 
 self.addEventListener("install", (event) => {
