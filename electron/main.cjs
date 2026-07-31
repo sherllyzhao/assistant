@@ -324,8 +324,8 @@ function loadTrayIconAsset(assetPath) {
 function getTrayImages() {
   if (!trayImages) {
     trayImages = {
-      base: loadTrayIconAsset(APP_ICON_PATH) || createTrayIcon("#12715f", "#dceee8"),
-      alert: loadTrayIconAsset(APP_ALERT_ICON_PATH) || createTrayIcon("#c94738", "#fff2a8"),
+      base: loadTrayIconAsset(APP_ICON_PATH) || createTrayIcon("#4F46E5", "#F43F5E"),
+      alert: loadTrayIconAsset(APP_ALERT_ICON_PATH) || createTrayIcon("#E11D48", "#FFFFFF"),
     };
   }
 
@@ -629,7 +629,7 @@ function createWindow() {
     minHeight: 680,
     title: APP_NAME,
     icon: APP_WINDOW_ICON_PATH,
-    backgroundColor: "#f5f7f4",
+    backgroundColor: "#f5f6fb",
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
