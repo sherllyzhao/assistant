@@ -57,10 +57,12 @@ import {
   createScheduleSuggestions,
   createTaskOrganizingSuggestions,
   createVaultPlaintext,
+  createVaultUsernameHint,
+  createEmptyVaultAccount,
+  createEmptyVaultDraft,
   createWorkMemoryLibrary,
   DEFAULT_FTP_CLIENT_PATH,
   emptyTaskDraft,
-  emptyVaultDraft,
   externalConnectionProviders,
   externalConnectionStatuses,
   filterLogsByRange,
@@ -95,6 +97,8 @@ import {
   normalizeWorkDomain,
   normalizeVaultItem,
   normalizeVaultItems,
+  normalizeVaultPlaintext,
+  toVaultAccountDrafts,
   priorities,
   shouldRemindCandidate,
   shouldRemindTask,
@@ -425,7 +429,7 @@ function App() {
   const [isPasswordSaving, setIsPasswordSaving] = useState(false);
   const [draft, setDraft] = useState(emptyTaskDraft);
   const [editingId, setEditingId] = useState("");
-  const [vaultDraft, setVaultDraft] = useState(emptyVaultDraft);
+  const [vaultDraft, setVaultDraft] = useState(createEmptyVaultDraft);
   const [vaultEditingId, setVaultEditingId] = useState("");
   const [vaultMasterPassword, setVaultMasterPassword] = useState("");
   const [vaultSearchQuery, setVaultSearchQuery] = useState("");
@@ -1605,6 +1609,29 @@ function App() {
     setVaultDraft((current) => ({ ...current, [field]: value }));
   }
 
+  function updateVaultDraftAccount(draftId, field, value) {
+    setVaultDraft((current) => ({
+      ...current,
+      accounts: current.accounts.map((account) =>
+        account.draftId === draftId ? { ...account, [field]: value } : account,
+      ),
+    }));
+  }
+
+  function addVaultDraftAccount() {
+    setVaultDraft((current) => ({
+      ...current,
+      accounts: [...current.accounts, createEmptyVaultAccount()],
+    }));
+  }
+
+  function removeVaultDraftAccount(draftId) {
+    setVaultDraft((current) => {
+      const accounts = current.accounts.filter((account) => account.draftId !== draftId);
+      return { ...current, accounts: accounts.length > 0 ? accounts : [createEmptyVaultAccount()] };
+    });
+  }
+
   function updateVaultFtpClientPath(value) {
     setData((current) => ({
       ...current,
@@ -1616,7 +1643,7 @@ function App() {
   }
 
   function resetVaultDraft() {
-    setVaultDraft(emptyVaultDraft);
+    setVaultDraft(createEmptyVaultDraft());
     setVaultEditingId("");
     setVaultStatus({ type: "", message: "" });
   }
@@ -1672,7 +1699,7 @@ function App() {
         title: vaultDraft.title.trim(),
         category: vaultDraft.category,
         tags: normalizeTags(vaultDraft.tags),
-        usernameHint: maskSecretValue(plaintext.username, 2, 1),
+        usernameHint: createVaultUsernameHint(plaintext.accounts),
         encrypted,
         createdAt: baseItem?.createdAt || now.toISOString(),
         updatedAt: now.toISOString(),
@@ -1697,7 +1724,7 @@ function App() {
       }));
       scheduleVaultAutoLock(vaultItem.id);
       setVaultStatus({ type: "success", message: vaultEditingId ? "安全速记已更新" : "安全速记已保存" });
-      setVaultDraft(emptyVaultDraft);
+      setVaultDraft(createEmptyVaultDraft());
       setVaultEditingId("");
     } catch (error) {
       setVaultStatus({ type: "error", message: error.message || "保存失败，请检查主密码。" });
@@ -1712,8 +1739,7 @@ function App() {
     setVaultDraft({
       title: item.title,
       category: item.category,
-      username: unlocked?.username || "",
-      password: unlocked?.password || "",
+      accounts: unlocked ? toVaultAccountDrafts(unlocked.accounts) : [createEmptyVaultAccount()],
       url: unlocked?.url || "",
       note: unlocked?.note || "",
       tags: Array.isArray(item.tags) ? item.tags.join(" ") : "",
@@ -1728,7 +1754,7 @@ function App() {
     setVaultStatus({ type: "", message: "" });
 
     try {
-      const plaintext = await decryptVaultPayload(item.encrypted, vaultMasterPassword);
+      const plaintext = normalizeVaultPlaintext(await decryptVaultPayload(item.encrypted, vaultMasterPassword));
       const now = new Date();
 
       setVaultUnlockedItems((current) => ({
@@ -1767,9 +1793,9 @@ function App() {
     });
   }
 
-  async function copyVaultValue(item, field, label) {
+  async function copyVaultValue(item, accountIndex, field, label) {
     const unlocked = vaultUnlockedItems[item.id];
-    const value = unlocked?.[field] || "";
+    const value = unlocked?.accounts?.[accountIndex]?.[field] || "";
 
     if (!value) {
       setVaultStatus({ type: "error", message: `没有可复制的${label}` });
@@ -2939,6 +2965,7 @@ function App() {
               ftpClientPath={String(data.settings?.ftpClientPath ?? DEFAULT_FTP_CLIENT_PATH)}
               items={filteredVaultItems}
               masterPassword={vaultMasterPassword}
+              onAddAccount={addVaultDraftAccount}
               onCancelEdit={resetVaultDraft}
               onCategoryFilterChange={setVaultCategoryFilter}
               onCopyValue={copyVaultValue}
@@ -2948,9 +2975,11 @@ function App() {
               onLockItem={lockVaultItem}
               onMasterPasswordChange={setVaultMasterPassword}
               onOpenTarget={openVaultTarget}
+              onRemoveAccount={removeVaultDraftAccount}
               onSearchChange={setVaultSearchQuery}
               onSubmit={submitVaultItem}
               onUnlockItem={unlockVaultItem}
+              onUpdateAccount={updateVaultDraftAccount}
               onUpdateDraft={updateVaultDraft}
               searchQuery={vaultSearchQuery}
               stats={vaultStats}
@@ -3747,6 +3776,7 @@ function VaultPanel({
   ftpClientPath,
   items,
   masterPassword,
+  onAddAccount,
   onCancelEdit,
   onCategoryFilterChange,
   onCopyValue,
@@ -3756,9 +3786,11 @@ function VaultPanel({
   onLockItem,
   onMasterPasswordChange,
   onOpenTarget,
+  onRemoveAccount,
   onSearchChange,
   onSubmit,
   onUnlockItem,
+  onUpdateAccount,
   onUpdateDraft,
   searchQuery,
   stats,
@@ -3844,24 +3876,58 @@ function VaultPanel({
               </label>
             </div>
 
-            <div className="form-grid">
-              <label>
-                账号
-                <input
-                  value={draft.username}
-                  onChange={(event) => onUpdateDraft("username", event.target.value)}
-                  placeholder="用户名 / 邮箱 / 手机号"
-                />
-              </label>
-              <label>
-                密码 / Token
-                <input
-                  type="password"
-                  value={draft.password}
-                  onChange={(event) => onUpdateDraft("password", event.target.value)}
-                  placeholder="保存时会加密"
-                />
-              </label>
+            <div className="vault-account-editor">
+              <div className="vault-account-editor-heading">
+                <span>账号（同一网址可以加多个）</span>
+                <button className="secondary-button" type="button" onClick={onAddAccount}>
+                  <Plus size={15} />
+                  再加一个账号
+                </button>
+              </div>
+
+              {draft.accounts.map((account, index) => (
+                <div className="vault-account-row" key={account.draftId}>
+                  <div className="form-grid">
+                    <label>
+                      账号{draft.accounts.length > 1 ? ` ${index + 1}` : ""}
+                      <input
+                        value={account.username}
+                        onChange={(event) => onUpdateAccount(account.draftId, "username", event.target.value)}
+                        placeholder="用户名 / 邮箱 / 手机号"
+                      />
+                    </label>
+                    <label>
+                      密码 / Token
+                      <input
+                        type="password"
+                        value={account.password}
+                        onChange={(event) => onUpdateAccount(account.draftId, "password", event.target.value)}
+                        placeholder="保存时会加密"
+                      />
+                    </label>
+                  </div>
+                  <div className="vault-account-row-extra">
+                    <label>
+                      账号备注
+                      <input
+                        value={account.note}
+                        onChange={(event) => onUpdateAccount(account.draftId, "note", event.target.value)}
+                        placeholder="管理员 / 测试号，可不填"
+                      />
+                    </label>
+                    {draft.accounts.length > 1 ? (
+                      <button
+                        className="icon-button"
+                        type="button"
+                        onClick={() => onRemoveAccount(account.draftId)}
+                        title="删除这个账号"
+                      >
+                        <X size={16} />
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
+              ))}
             </div>
 
             <label>
@@ -3958,6 +4024,7 @@ function VaultPanel({
 function VaultItemCard({ item, onCopyValue, onDeleteItem, onEditItem, onLockItem, onOpenTarget, onUnlockItem, unlocked }) {
   const category = vaultCategories.find((option) => option.value === item.category) || vaultCategories[vaultCategories.length - 1];
   const tags = Array.isArray(item.tags) ? item.tags : [];
+  const unlockedAccounts = Array.isArray(unlocked?.accounts) ? unlocked.accounts : [];
   const hasOpenTarget = Boolean(unlocked && (unlocked.url || item.category === "ftp"));
   const openButtonLabel = isFtpVaultTarget(item, unlocked?.url) ? "打开 FTP" : "打开网址";
 
@@ -3974,28 +4041,62 @@ function VaultItemCard({ item, onCopyValue, onDeleteItem, onEditItem, onLockItem
         </button>
       </div>
 
-      <dl className="vault-fields">
-        <div>
-          <dt>账号</dt>
-          <dd>{unlocked?.username || item.usernameHint || "未填写"}</dd>
+      {unlocked ? (
+        <div className="vault-account-list">
+          {unlockedAccounts.length === 0 ? (
+            <p className="vault-account-empty">这条速记没有保存账号，只有网址或备注。</p>
+          ) : (
+            unlockedAccounts.map((account, index) => (
+              <div className="vault-account-item" key={index}>
+                <div className="vault-account-main">
+                  <strong>{account.username || "未填写"}</strong>
+                  <span>{account.password ? maskSecretValue(account.password, 0, 0) : "无密码"}</span>
+                  {account.note ? <em>{account.note}</em> : null}
+                </div>
+                <div className="vault-account-copy">
+                  <button type="button" onClick={() => onCopyValue(item, index, "username", "账号")} disabled={!account.username}>
+                    <Copy size={13} />
+                    账号
+                  </button>
+                  <button type="button" onClick={() => onCopyValue(item, index, "password", "密码")} disabled={!account.password}>
+                    <Copy size={13} />
+                    密码
+                  </button>
+                </div>
+              </div>
+            ))
+          )}
         </div>
-        <div>
-          <dt>密码</dt>
-          <dd>{unlocked?.password ? maskSecretValue(unlocked.password, 0, 0) : "已加密"}</dd>
-        </div>
-        {unlocked?.url ? (
-          <div>
-            <dt>网址</dt>
-            <dd>{unlocked.url}</dd>
-          </div>
-        ) : null}
-        {unlocked?.note ? (
-          <div>
-            <dt>备注</dt>
-            <dd>{unlocked.note}</dd>
-          </div>
-        ) : null}
-      </dl>
+      ) : null}
+
+      {!unlocked || unlocked.url || unlocked.note ? (
+        <dl className="vault-fields">
+          {!unlocked ? (
+            <>
+              <div>
+                <dt>账号</dt>
+                <dd>{item.usernameHint || "未填写"}</dd>
+              </div>
+              <div>
+                <dt>密码</dt>
+                <dd>已加密</dd>
+              </div>
+            </>
+          ) : null}
+          {unlocked?.url ? (
+            <div>
+              <dt>网址</dt>
+              <dd>{unlocked.url}</dd>
+            </div>
+          ) : null}
+          {unlocked?.note ? (
+            <div>
+              <dt>备注</dt>
+              <dd>{unlocked.note}</dd>
+            </div>
+          ) : null}
+        </dl>
+      ) : null}
 
       {tags.length > 0 ? (
         <div className="tag-list">
@@ -4006,12 +4107,6 @@ function VaultItemCard({ item, onCopyValue, onDeleteItem, onEditItem, onLockItem
       ) : null}
 
       <div className="vault-item-actions">
-        <button type="button" onClick={() => onCopyValue(item, "username", "账号")} disabled={!unlocked}>
-          复制账号
-        </button>
-        <button type="button" onClick={() => onCopyValue(item, "password", "密码")} disabled={!unlocked}>
-          复制密码
-        </button>
         {hasOpenTarget ? (
           <button type="button" onClick={() => onOpenTarget(item)}>
             <ExternalLink size={15} />

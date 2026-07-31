@@ -208,15 +208,25 @@ export const emptyTaskDraft = {
   attachments: [],
 };
 
-export const emptyVaultDraft = {
-  title: "",
-  category: "website",
-  username: "",
-  password: "",
-  url: "",
-  note: "",
-  tags: "",
-};
+export function createEmptyVaultAccount() {
+  return {
+    draftId: createId("vault-account"),
+    username: "",
+    password: "",
+    note: "",
+  };
+}
+
+export function createEmptyVaultDraft() {
+  return {
+    title: "",
+    category: "website",
+    accounts: [createEmptyVaultAccount()],
+    url: "",
+    note: "",
+    tags: "",
+  };
+}
 
 export function createId(prefix) {
   if (globalThis.crypto?.randomUUID) {
@@ -244,13 +254,61 @@ export function maskSecretValue(value, visibleStart = 2, visibleEnd = 2) {
   return `${cleanValue.slice(0, visibleStart)}${"•".repeat(6)}${cleanValue.slice(-visibleEnd)}`;
 }
 
+export function normalizeVaultAccounts(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((account) => ({
+      username: String(account?.username || "").trim(),
+      password: String(account?.password || ""),
+      note: String(account?.note || "").trim(),
+    }))
+    .filter((account) => account.username || account.password || account.note);
+}
+
+export function toVaultAccountDrafts(accounts) {
+  const normalized = normalizeVaultAccounts(accounts);
+
+  return normalized.length > 0
+    ? normalized.map((account) => ({ ...account, draftId: createId("vault-account") }))
+    : [createEmptyVaultAccount()];
+}
+
 export function createVaultPlaintext(draft) {
   return {
-    username: String(draft?.username || "").trim(),
-    password: String(draft?.password || ""),
     url: String(draft?.url || "").trim(),
     note: String(draft?.note || "").trim(),
+    accounts: normalizeVaultAccounts(draft?.accounts),
   };
+}
+
+export function normalizeVaultPlaintext(payload) {
+  const accounts = normalizeVaultAccounts(payload?.accounts);
+  const legacyAccounts = normalizeVaultAccounts([
+    {
+      username: payload?.username,
+      password: payload?.password,
+    },
+  ]);
+
+  return {
+    url: String(payload?.url || "").trim(),
+    note: String(payload?.note || "").trim(),
+    accounts: accounts.length > 0 ? accounts : legacyAccounts,
+  };
+}
+
+export function createVaultUsernameHint(accounts) {
+  const named = normalizeVaultAccounts(accounts).filter((account) => account.username);
+
+  if (named.length === 0) {
+    return "";
+  }
+
+  const hint = maskSecretValue(named[0].username, 2, 1);
+  return named.length > 1 ? `${hint} 等 ${named.length} 个账号` : hint;
 }
 
 export function normalizeVaultItem(item) {
