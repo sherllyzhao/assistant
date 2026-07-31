@@ -2531,14 +2531,14 @@ export function createAiWorkspaceAnswer(tasks, logs, query = "", now = new Date(
   const generateRiskTips = () => {
     const tips = [];
     if (overdueTasks.length > 0) {
-      tips.push(`⚠️ 有 ${overdueTasks.length} 件已逾期任务，建议立即处理。`);
+      tips.push(`有 ${overdueTasks.length} 件已逾期任务，建议立即处理。`);
     }
     if (waitingTasks.length > 0) {
-      tips.push(`⏳ 有 ${waitingTasks.length} 件等待他人反馈，可以考虑催办或寻找替代方案。`);
+      tips.push(`有 ${waitingTasks.length} 件等待他人反馈，可以考虑催办或寻找替代方案。`);
     }
     const dueToday = activeTasks.filter((t) => isTaskDueBefore(t, endOfLocalDay(now).getTime()) && !isOverdue(t, now));
     if (dueToday.length > 0) {
-      tips.push(`📅 今天还有 ${dueToday.length} 件截止，排好执行顺序。`);
+      tips.push(`今天还有 ${dueToday.length} 件截止，排好执行顺序。`);
     }
     return tips.length > 0 ? tips : baseTips;
   };
@@ -2574,7 +2574,7 @@ export function createAiWorkspaceAnswer(tasks, logs, query = "", now = new Date(
     return {
       intent,
       label: "风险扫描",
-      title: riskScore > 10 ? "⚠️ 风险较高，建议立即处理" : riskScore > 5 ? "⚠️ 存在一些风险" : "🟡 风险水平正常",
+      title: riskScore > 10 ? "风险较高，建议立即处理" : riskScore > 5 ? "存在一些风险" : "风险水平正常",
       summary: `风险评分 ${riskScore}/20。来源：${overdueTasks.length} 件逾期、${waitingTasks.length} 件等待他人回复、${dueSoonTasks.filter(t => !isOverdue(t, now)).length} 件高优先级或今日到期。`,
       taskSectionTitle: "风险任务",
       metrics: {
@@ -2600,18 +2600,18 @@ export function createAiWorkspaceAnswer(tasks, logs, query = "", now = new Date(
       .slice(0, 8);
     const focusTips = [];
     if (activeTasks.length > 10) {
-      focusTips.push(`📊 你有 ${activeTasks.length} 件未完成任务，建议集中精力在优先级最高的 3-5 件上。`);
+      focusTips.push(`你有 ${activeTasks.length} 件未完成任务，建议集中精力在优先级最高的 3-5 件上。`);
     }
     if (primaryTasks.length === 0) {
-      focusTips.push("✅ 目前没有特别紧迫的任务，可以选择之前暂停的工作继续推进。");
+      focusTips.push("目前没有特别紧迫的任务，可以选择之前暂停的工作继续推进。");
     } else {
-      focusTips.push(`🎯 建议按顺序处理这 ${primaryTasks.length} 件任务。`);
+      focusTips.push(`建议按顺序处理这 ${primaryTasks.length} 件任务。`);
     }
 
     return {
       intent,
       label: "优先级建议",
-      title: primaryTasks.length > 0 ? "🎯 现在先处理这些" : "✅ 当前没有紧迫任务",
+      title: primaryTasks.length > 0 ? "现在先处理这些" : "当前没有紧迫任务",
       summary: `按逾期、优先级、截止时间和进行中状态排序。${primaryTasks.length > 0 ? `当前最值得先看的有 ${primaryTasks.length} 件。` : "你的任务优先级分布合理。"}`,
       taskSectionTitle: "优先处理",
       metrics: baseMetrics,
@@ -2633,13 +2633,13 @@ export function createAiWorkspaceAnswer(tasks, logs, query = "", now = new Date(
       .sort(sortAssistantTasksByFocus)
       .slice(0, 8);
     const tomorrowTips = primaryTasks.length > 0
-      ? [`📅 明天有 ${primaryTasks.length} 件任务，今天最好提前准备关键信息。`]
-      : ["✅ 明天没有特别安排，可以提前规划后天的工作。"];
+      ? [`明天有 ${primaryTasks.length} 件任务，今天最好提前准备关键信息。`]
+      : ["明天没有特别安排，可以提前规划后天的工作。"];
 
     return {
       intent,
       label: "明日安排",
-      title: primaryTasks.length > 0 ? "📅 明天要盯住的事" : "✅ 明天日程充足",
+      title: primaryTasks.length > 0 ? "明天要盯住的事" : "明天日程充足",
       summary: `明天截止或适合提前安排的任务有 ${primaryTasks.length} 件；${primaryTasks.length === 0 ? "说明当前任务里没有明确的明日截止时间。" : "建议今天就完成准备工作。"}`,
       taskSectionTitle: "明日任务",
       metrics: baseMetrics,
@@ -2664,7 +2664,7 @@ export function createAiWorkspaceAnswer(tasks, logs, query = "", now = new Date(
     return {
       intent,
       label: "截止安排",
-      title: primaryTasks.length > 0 ? "📅 有明确时间的任务" : "✅ 没有带截止时间的任务",
+      title: primaryTasks.length > 0 ? "有明确时间的任务" : "没有带截止时间的任务",
       summary: primaryTasks.length > 0
         ? `当前有 ${primaryTasks.length} 件任务带截止或提醒时间；按优先级和最近截止排序。`
         : "暂时没有任务带截止时间，可以给关键任务补上截止日期方便跟进。",

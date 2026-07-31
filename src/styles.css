@@ -1739,9 +1739,17 @@ textarea:focus {
 }
 
 .ai-answer-heading strong {
+  display: flex;
+  align-items: center;
+  gap: 7px;
   font-size: 17px;
   line-height: 1.35;
   overflow-wrap: anywhere;
+}
+
+.ai-answer-heading strong svg {
+  flex: 0 0 auto;
+  color: var(--accent);
 }
 
 .ai-answer-heading em {
@@ -2179,8 +2187,16 @@ textarea:focus {
 }
 
 .organizing-heading h3 {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   margin: 0;
   font-size: 16px;
+}
+
+.organizing-heading h3 svg {
+  flex: 0 0 auto;
+  color: var(--warning);
 }
 
 .organizing-heading > span,
@@ -3220,6 +3236,11 @@ textarea:focus {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.tools-section h3 svg {
+  flex: 0 0 auto;
+  color: var(--accent);
 }
 
 .tools-controls {

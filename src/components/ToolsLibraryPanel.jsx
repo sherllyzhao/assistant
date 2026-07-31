@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ExternalLink, Download, FileText, FolderOpen, Plus, Search, Trash2, Copy, Edit2 } from "lucide-react";
+import { ExternalLink, Download, FileText, FolderOpen, Plus, Search, Trash2, Copy, Edit2, Wrench, BookOpen, Keyboard, Lightbulb } from "lucide-react";
 import { getToolsLibraryLinks, getToolsLibraryCommands, openToolsLibrary } from "../lib/toolsLibrary.js";
 import { searchTools, filterToolsByCategory } from "../lib/toolsLibrary.js";
 import { toolCategories, emptyToolDraft, createTool, getToolCategoryMeta } from "../lib/domain.js";
@@ -102,7 +102,7 @@ export function ToolsLibraryPanel({ tools = [], onDeleteTool, onToolsChange }) {
 
       {/* 工具管理区域 */}
       <section className="tools-section">
-        <h3>🔧 我的工具</h3>
+        <h3><Wrench size={18} />我的工具</h3>
 
         {/* 工具添加表单 */}
         {showForm && (
@@ -240,7 +240,7 @@ export function ToolsLibraryPanel({ tools = [], onDeleteTool, onToolsChange }) {
 
       {/* 快速访问 */}
       <section className="tools-section">
-        <h3>📚 快速访问</h3>
+        <h3><BookOpen size={18} />快速访问</h3>
         <div className="tools-grid">
           {Object.entries(links).map(([key, link]) => (
             <button
@@ -265,7 +265,7 @@ export function ToolsLibraryPanel({ tools = [], onDeleteTool, onToolsChange }) {
 
       {/* 命令行快速命令 */}
       <section className="tools-section">
-        <h3>⌨️ 命令行快速命令</h3>
+        <h3><Keyboard size={18} />命令行快速命令</h3>
         <div className="commands-list">
           {commands.map((item, index) => (
             <div key={index} className="command-item">
@@ -288,7 +288,7 @@ export function ToolsLibraryPanel({ tools = [], onDeleteTool, onToolsChange }) {
 
       {/* 使用提示 */}
       <section className="tools-section">
-        <h3>💡 使用提示</h3>
+        <h3><Lightbulb size={18} />使用提示</h3>
         <ul className="tips-list">
           <li>在这里记录你常用工具的路径，再也不用担心忘记在哪了</li>
           <li>支持按工具名称、路径或描述搜索</li>

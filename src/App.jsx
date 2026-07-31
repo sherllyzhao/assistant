@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  AlertTriangle,
   Bell,
   CalendarClock,
   CheckCircle2,
@@ -11,6 +12,7 @@ import {
   ExternalLink,
   FileText,
   Filter,
+  HelpCircle,
   Image as ImageIcon,
   Inbox,
   KeyRound,
@@ -25,6 +27,7 @@ import {
   Save,
   Search,
   ShieldCheck,
+  Target,
   Trash2,
   UserRound,
   Upload,
@@ -166,8 +169,16 @@ const viewOptions = [
   { value: "connections", label: "外部连接", description: "管理授权范围和撤销记录" },
   { value: "vault", label: "安全速记", description: "保存账号、密码和密钥" },
   { value: "report", label: "工作日报", description: "查看日报概览与日志明细" },
-  { value: "tools", label: "🛠️ 工具库", description: "查询和管理常用小工具" },
+  { value: "tools", label: "工具库", description: "查询和管理常用小工具" },
 ];
+
+const assistantIntentIcons = {
+  help: HelpCircle,
+  risk: AlertTriangle,
+  focus: Target,
+  tomorrow: CalendarClock,
+  schedule: CalendarClock,
+};
 
 const assistantQuestionPresets = [
   "今天还有什么没完成？",
@@ -4061,7 +4072,7 @@ function WorkMemoryPanel({ habits = [], memory, onDeleteHabit, onHabitsChange, o
           <div className="organizing-heading">
             <div>
               <p className="eyebrow">Stale Tasks</p>
-              <h3>⚠️ 长期未动任务</h3>
+              <h3><AlertTriangle size={18} />长期未动任务</h3>
             </div>
             <span>{staleWarnings.length} 条预警</span>
           </div>
@@ -4245,6 +4256,7 @@ function AiWorkspacePanel({
   ].filter(Boolean);
   const hasDraftChanges = draftQuestion.trim() !== question.trim();
   const answerTips = Array.isArray(answer.tips) ? answer.tips : [];
+  const AnswerIntentIcon = assistantIntentIcons[answer.intent] || null;
   const answerKeywords = Array.isArray(answer.keywords) ? answer.keywords : [];
 
   function handleSubmit(event) {
@@ -4293,7 +4305,10 @@ function AiWorkspacePanel({
         <div className="ai-answer-heading">
           <div>
             <span>{answer.label}</span>
-            <strong>{answer.title}</strong>
+            <strong>
+              {AnswerIntentIcon ? <AnswerIntentIcon size={18} /> : null}
+              {answer.title}
+            </strong>
           </div>
           <em>{formatDateTime(answer.generatedAt)}</em>
         </div>
