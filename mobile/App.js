@@ -152,7 +152,12 @@ function AppContent() {
         ? { ...item, status: "done", completedAt: now, updatedAt: now }
         : item),
     };
-    await persistData(nextData);
+
+    try {
+      await persistData(nextData);
+    } catch (error) {
+      Alert.alert("完成任务失败", error?.message || "网络异常，请稍后重试");
+    }
   }
 
   async function handleCalendar(task) {
@@ -224,7 +229,7 @@ function AppContent() {
 
       <View style={styles.tabBar}>
         <TabButton label="任务" active={screen === "home"} onPress={() => setScreen("home")} />
-        <Pressable style={styles.addButton} onPress={() => setEditorTask({})} accessibilityLabel="新增任务">
+        <Pressable style={styles.addButton} onPress={() => setEditorTask({})} accessibilityLabel="新增任务" hitSlop={10}>
           <Text style={styles.addButtonText}>+</Text>
         </Pressable>
         <TabButton label="设置" active={screen === "settings"} onPress={() => setScreen("settings")} />
@@ -333,6 +338,42 @@ function TaskEditor({ task, onClose, onSave }) {
   const interval = getPriorityMeta(priority).reminderMinutes;
   const reminderStartAt = new Date(reminderEndAt.getTime() - interval * 60 * 1000);
 
+  // Android 不支持 mode="datetime"（会退化成仅日期），拆成 date -> time 两步。
+  function openPicker(field) {
+    setPicker({ field, stage: Platform.OS === "ios" ? "datetime" : "date" });
+  }
+
+  function handlePickerChange(event, date) {
+    if (!picker) return;
+
+    if (!date || event?.type === "dismissed") {
+      setPicker(null);
+      return;
+    }
+
+    const isDue = picker.field === "due";
+    const base = isDue ? dueAt : reminderEndAt;
+    const setValue = isDue ? setDueAt : setReminderEndAt;
+
+    if (picker.stage === "date") {
+      const merged = new Date(date);
+      merged.setHours(base.getHours(), base.getMinutes(), 0, 0);
+      setValue(merged);
+      setPicker({ field: picker.field, stage: "time" });
+      return;
+    }
+
+    if (picker.stage === "time") {
+      const merged = new Date(base);
+      merged.setHours(date.getHours(), date.getMinutes(), 0, 0);
+      setValue(merged);
+    } else {
+      setValue(date);
+    }
+
+    setPicker(null);
+  }
+
   async function submit() {
     if (!title.trim()) {
       Alert.alert("还差一步", "请填写任务标题");
@@ -351,8 +392,9 @@ function TaskEditor({ task, onClose, onSave }) {
         reminderStartAt: hasReminder ? reminderStartAt.toISOString() : "",
         reminderEndAt: hasReminder ? reminderEndAt.toISOString() : "",
       });
-    } catch {
-      // The parent displays the network error and keeps the editor open.
+    } catch (error) {
+      // 顶部的 Notice 会被弹层遮挡，必须用 Alert 直接告知失败原因。
+      Alert.alert("保存失败", error?.message || "网络异常，请稍后重试");
     } finally {
       setSaving(false);
     }
@@ -371,11 +413,11 @@ function TaskEditor({ task, onClose, onSave }) {
             <Text style={styles.label}>优先级与提醒间隔</Text>
             <View style={styles.choiceRow}>{priorities.map((item) => <Choice key={item.value} active={priority === item.value} label={`${item.label} ${item.reminderMinutes}分钟`} onPress={() => setPriority(item.value)} />)}</View>
             <Text style={styles.label}>截止时间</Text>
-            <Pressable style={styles.dateButton} onPress={() => setPicker("due")}><Text style={styles.dateText}>{formatDate(dueAt)}</Text></Pressable>
+            <Pressable style={styles.dateButton} onPress={() => openPicker("due")}><Text style={styles.dateText}>{formatDate(dueAt)}</Text></Pressable>
             <View style={styles.switchRow}><Text style={styles.label}>持续提醒直到截止</Text><Switch value={hasReminder} onValueChange={setHasReminder} trackColor={{ true: colors.accent }} /></View>
             {hasReminder ? <Text style={styles.reminderHint}>将从 {formatDate(reminderStartAt)} 开始，每 {interval} 分钟提醒一次。</Text> : null}
-            {hasReminder ? <Pressable style={styles.dateButton} onPress={() => setPicker("reminderEnd")}><Text style={styles.dateText}>提醒结束：{formatDate(reminderEndAt)}</Text></Pressable> : null}
-            {picker ? <DateTimePicker value={picker === "due" ? dueAt : reminderEndAt} mode="datetime" onChange={(_, date) => { setPicker(null); if (date) picker === "due" ? setDueAt(date) : setReminderEndAt(date); }} /> : null}
+            {hasReminder ? <Pressable style={styles.dateButton} onPress={() => openPicker("reminderEnd")}><Text style={styles.dateText}>提醒结束：{formatDate(reminderEndAt)}</Text></Pressable> : null}
+            {picker ? <DateTimePicker value={picker.field === "due" ? dueAt : reminderEndAt} mode={picker.stage} onChange={handlePickerChange} /> : null}
             <Pressable style={styles.primaryButton} disabled={saving} onPress={submit}>{saving ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryButtonText}>保存任务</Text>}</Pressable>
           </ScrollView>
         </View>
@@ -451,7 +493,8 @@ const styles = StyleSheet.create({
   tabButton: { width: 84, alignItems: "center", padding: 12 },
   tabText: { color: colors.muted, fontWeight: "700" },
   tabTextActive: { color: colors.accent },
-  addButton: { width: 48, height: 48, borderRadius: 24, backgroundColor: colors.accent, justifyContent: "center", alignItems: "center", marginTop: -24, shadowColor: "#000", shadowOpacity: 0.15, shadowRadius: 6, elevation: 4 },
+  // 不使用负 margin 悬浮：Android 上超出父容器边界的区域收不到触摸事件（react-native#28894）。
+  addButton: { width: 52, height: 52, borderRadius: 26, backgroundColor: colors.accent, justifyContent: "center", alignItems: "center", shadowColor: "#000", shadowOpacity: 0.15, shadowRadius: 6, elevation: 4 },
   addButtonText: { color: "#fff", fontSize: 30, lineHeight: 32, fontWeight: "300" },
   loading: { flex: 1, backgroundColor: colors.bg, justifyContent: "center", alignItems: "center", gap: 12 },
   muted: { color: colors.muted, lineHeight: 19, fontSize: 13 },

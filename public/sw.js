@@ -1,5 +1,6 @@
-const CACHE_NAME = "sherlly-pwa-v2";
-const APP_SHELL = ["/", "/index.html", "/favicon.png", "/manifest.webmanifest"];
+const CACHE_NAME = "sherlly-pwa-v3";
+// 相对路径基于 sw.js 所在目录解析，兼容根路径与子路径（GitHub Pages /assistant/）部署。
+const APP_SHELL = ["./", "./index.html", "./favicon.png", "./manifest.webmanifest"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
@@ -47,7 +48,7 @@ self.addEventListener("fetch", (event) => {
       .catch(() =>
         caches
           .match(event.request)
-          .then((cached) => cached || (event.request.mode === "navigate" ? caches.match("/index.html") : undefined)),
+          .then((cached) => cached || (event.request.mode === "navigate" ? caches.match("./index.html") : undefined)),
       ),
   );
 });

@@ -27,13 +27,15 @@
       }
     ]
   },
-  "r2_buckets": [
-    {
-      "binding": "SHERLLY_ATTACHMENTS",
-      "bucket_name": "sherlly-attachments",
-      "preview_bucket_name": "sherlly-attachments-preview"
-    }
-  ],
+  // R2 尚未在当前 Cloudflare 账号启用（Dashboard → R2 开通并创建 bucket 后，恢复以下绑定并重新部署）。
+  // worker.js 对缺失绑定有降级处理：云附件接口返回“云附件暂未启用”。
+  // "r2_buckets": [
+  //   {
+  //     "binding": "SHERLLY_ATTACHMENTS",
+  //     "bucket_name": "sherlly-attachments",
+  //     "preview_bucket_name": "sherlly-attachments-preview"
+  //   }
+  // ],
   "ai": {
     "binding": "AI"
   },
@@ -53,7 +55,7 @@
   ],
   "vars": {
     "SHERLLY_SESSION_TTL_DAYS": "30",
-    "CORS_ORIGIN": "http://localhost:5188",
+    "CORS_ORIGIN": "https://sherllyzhao.github.io,http://localhost:5188,http://127.0.0.1:5188",
     "TURNSTILE_EXPECTED_HOSTNAME": "",
     "WORKERS_AI_MODEL": "",
     "GOOGLE_OAUTH_CLIENT_ID": "",

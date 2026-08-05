@@ -8,6 +8,7 @@ on:
     paths:
       - index.html
       - src/**
+      - public/**
       - vite.config.js
       - .github/workflows/deploy-frontend.yml
   workflow_dispatch:

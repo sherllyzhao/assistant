@@ -15,6 +15,7 @@ const canRegisterServiceWorker =
 
 if (canRegisterServiceWorker) {
   window.addEventListener("load", () => {
-    navigator.serviceWorker.register("/sw.js").catch((error) => console.error(error));
+    // 相对路径注册：部署在子路径（如 GitHub Pages 的 /assistant/）时绝对路径 /sw.js 会 404。
+    navigator.serviceWorker.register("./sw.js").catch((error) => console.error(error));
   });
 }
