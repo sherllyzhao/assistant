@@ -30,7 +30,7 @@
       "expo-secure-store"
     ],
     "extra": {
-      "apiUrl": "",
+      "apiUrl": "https://sherlly-api-proxy.pages.dev",
       "eas": {
         "projectId": "0562e813-2c1f-4fe3-a0b3-3775101a268d"
       }
