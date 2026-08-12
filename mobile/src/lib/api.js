@@ -45,26 +45,47 @@ async function request(path, options = {}) {
     headers.Authorization = `Bearer ${auth.token}`;
   }
 
-  const response = await fetch(`${requireApiUrl()}${path}`, {
-    ...options,
-    headers,
-  });
-  const body = await response.json().catch(() => ({}));
+  // 设置 30 秒超时（国内网络环境可能较慢）
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 30000);
 
-  if (!response.ok) {
-    const error = new Error(body?.message || `请求失败：${response.status}`);
-    error.status = response.status;
-    error.code = body?.code || "";
-    error.body = body;
+  try {
+    const response = await fetch(`${requireApiUrl()}${path}`, {
+      ...options,
+      headers,
+      signal: controller.signal,
+    });
 
-    if (response.status === 401) {
-      await clearStoredAuth();
+    clearTimeout(timeoutId);
+
+    const body = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      const error = new Error(body?.message || `请求失败：${response.status}`);
+      error.status = response.status;
+      error.code = body?.code || "";
+      error.body = body;
+
+      if (response.status === 401) {
+        await clearStoredAuth();
+      }
+
+      throw error;
     }
 
-    throw error;
-  }
+    return body;
+  } catch (err) {
+    clearTimeout(timeoutId);
 
-  return body;
+    // 超时错误提供更友好的提示
+    if (err.name === 'AbortError') {
+      const error = new Error('网络请求超时，请检查网络连接后重试');
+      error.code = 'TIMEOUT';
+      throw error;
+    }
+
+    throw err;
+  }
 }
 
 export async function login(username, password) {
