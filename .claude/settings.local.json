@@ -5,7 +5,11 @@
       "mcp__context7__query-docs",
       "WebFetch(domain:electron-vite.org)",
       "mcp__fast-context__fast_context_search",
-      "mcp__fast-context__extract_windsurf_key"
+      "mcp__fast-context__extract_windsurf_key",
+      "PowerShell(codex *)",
+      "PowerShell(volta list *)",
+      "PowerShell(volta install *)",
+      "PowerShell(npm *)"
     ]
   }
 }

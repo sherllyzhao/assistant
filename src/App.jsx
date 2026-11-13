@@ -6,6 +6,7 @@ import {
   CheckCircle2,
   ClipboardList,
   Clock3,
+  Columns2,
   Copy,
   Download,
   Eye,
@@ -1734,7 +1735,9 @@ function App() {
   function editVaultItem(item) {
     const unlocked = vaultUnlockedItems[item.id];
 
-    setActiveView("vault");
+    if (activeView !== "split") {
+      setActiveView("vault");
+    }
     setVaultEditingId(item.id);
     setVaultDraft({
       title: item.title,
@@ -2699,6 +2702,40 @@ function App() {
     );
   }
 
+  const isSplitView = activeView === "split";
+  const vaultPanel = (
+    <VaultPanel
+      compact={isSplitView}
+      categoryFilter={vaultCategoryFilter}
+      cryptoSupported={hasVaultCryptoSupport()}
+      draft={vaultDraft}
+      editingId={vaultEditingId}
+      ftpClientPath={String(data.settings?.ftpClientPath ?? DEFAULT_FTP_CLIENT_PATH)}
+      items={filteredVaultItems}
+      masterPassword={vaultMasterPassword}
+      onAddAccount={addVaultDraftAccount}
+      onCancelEdit={resetVaultDraft}
+      onCategoryFilterChange={setVaultCategoryFilter}
+      onCopyValue={copyVaultValue}
+      onDeleteItem={deleteVaultItem}
+      onEditItem={editVaultItem}
+      onFtpClientPathChange={updateVaultFtpClientPath}
+      onLockItem={lockVaultItem}
+      onMasterPasswordChange={setVaultMasterPassword}
+      onOpenTarget={openVaultTarget}
+      onRemoveAccount={removeVaultDraftAccount}
+      onSearchChange={setVaultSearchQuery}
+      onSubmit={submitVaultItem}
+      onUnlockItem={unlockVaultItem}
+      onUpdateAccount={updateVaultDraftAccount}
+      onUpdateDraft={updateVaultDraft}
+      searchQuery={vaultSearchQuery}
+      stats={vaultStats}
+      status={vaultStatus}
+      unlockedItems={vaultUnlockedItems}
+    />
+  );
+
   return (
     <main className="app-shell">
       <header className="topbar">
@@ -2824,7 +2861,7 @@ function App() {
         {viewOptions.map((option) => (
           <button
             key={option.value}
-            className={activeView === option.value ? "is-active" : ""}
+            className={activeView === option.value || (isSplitView && ["tasks", "vault"].includes(option.value)) ? "is-active" : ""}
             type="button"
             onClick={() => setActiveView(option.value)}
           >
@@ -2834,11 +2871,32 @@ function App() {
         ))}
       </section>
 
-      <div className={`workspace-grid ${["profile", "vault", "memory", "connections"].includes(activeView) ? "profile-grid" : ""} ${isViewTransitioning ? "is-transitioning" : ""}`}>
+      {["tasks", "vault", "split"].includes(activeView) ? (
+        <section className="workspace-layout-bar" aria-label="工作区布局">
+          <div>
+            <strong>任务与速记同屏</strong>
+            <span>{isSplitView ? "两边可独立滚动，边看待办边查账号密码" : "同时查看任务看板和安全速记"}</span>
+          </div>
+          <button
+            className="secondary-button"
+            type="button"
+            aria-pressed={isSplitView}
+            onClick={() => {
+              setActiveView(isSplitView ? "tasks" : "split");
+              window.requestAnimationFrame(() => document.getElementById("workspace-layout")?.scrollIntoView({ block: "start", behavior: "smooth" }));
+            }}
+          >
+            <Columns2 size={17} />
+            {isSplitView ? "退出分屏" : "开启分屏"}
+          </button>
+        </section>
+      ) : null}
+
+      <div id="workspace-layout" className={`workspace-grid ${["profile", "vault", "memory", "connections"].includes(activeView) ? "profile-grid" : ""} ${isSplitView ? "split-workspace" : ""} ${isViewTransitioning ? "is-transitioning" : ""}`}>
         <section
           className="task-area"
           aria-label={
-            activeView === "tasks"
+            activeView === "tasks" || isSplitView
               ? "任务列表"
               : activeView === "profile"
                 ? "个人信息"
@@ -2853,7 +2911,7 @@ function App() {
                         : "工作日报"
           }
         >
-          {activeView === "tasks" ? (
+          {activeView === "tasks" || isSplitView ? (
             <>
               <div className="section-toolbar">
                 <div>
@@ -2957,35 +3015,7 @@ function App() {
               onDisconnectGoogle={disconnectGoogleCalendarRecord}
             />
           ) : activeView === "vault" ? (
-            <VaultPanel
-              categoryFilter={vaultCategoryFilter}
-              cryptoSupported={hasVaultCryptoSupport()}
-              draft={vaultDraft}
-              editingId={vaultEditingId}
-              ftpClientPath={String(data.settings?.ftpClientPath ?? DEFAULT_FTP_CLIENT_PATH)}
-              items={filteredVaultItems}
-              masterPassword={vaultMasterPassword}
-              onAddAccount={addVaultDraftAccount}
-              onCancelEdit={resetVaultDraft}
-              onCategoryFilterChange={setVaultCategoryFilter}
-              onCopyValue={copyVaultValue}
-              onDeleteItem={deleteVaultItem}
-              onEditItem={editVaultItem}
-              onFtpClientPathChange={updateVaultFtpClientPath}
-              onLockItem={lockVaultItem}
-              onMasterPasswordChange={setVaultMasterPassword}
-              onOpenTarget={openVaultTarget}
-              onRemoveAccount={removeVaultDraftAccount}
-              onSearchChange={setVaultSearchQuery}
-              onSubmit={submitVaultItem}
-              onUnlockItem={unlockVaultItem}
-              onUpdateAccount={updateVaultDraftAccount}
-              onUpdateDraft={updateVaultDraft}
-              searchQuery={vaultSearchQuery}
-              stats={vaultStats}
-              status={vaultStatus}
-              unlockedItems={vaultUnlockedItems}
-            />
+            vaultPanel
           ) : activeView === "assistant" ? (
             <AiWorkspacePanel
               answer={aiWorkspaceAnswer}
@@ -3042,7 +3072,13 @@ function App() {
           )}
         </section>
 
-        {["profile", "vault", "memory", "connections", "tools"].includes(activeView) ? null : (
+        {isSplitView ? (
+          <section className="task-area split-vault-area" aria-label="安全速记" tabIndex={0}>
+            {vaultPanel}
+          </section>
+        ) : null}
+
+        {["profile", "vault", "memory", "connections", "tools", "split"].includes(activeView) ? null : (
         <aside className="side-rail" aria-label="录入与候选任务">
           <section className="panel">
             <div className="panel-heading">
@@ -3769,6 +3805,7 @@ function ProfilePanel({
 }
 
 function VaultPanel({
+  compact = false,
   categoryFilter,
   cryptoSupported,
   draft,
@@ -3797,8 +3834,11 @@ function VaultPanel({
   status,
   unlockedItems,
 }) {
+  const [isEditorExpanded, setIsEditorExpanded] = useState(false);
+  const isEditorVisible = !compact || isEditorExpanded || Boolean(editingId);
+
   return (
-    <div className="vault-panel">
+    <div className={`vault-panel ${compact ? "is-compact" : ""}`}>
       <div className="section-toolbar vault-toolbar">
         <div>
           <p className="eyebrow">Secure Notes</p>
@@ -3844,7 +3884,21 @@ function VaultPanel({
       ) : null}
 
       <div className="vault-grid">
-        <section className="vault-card">
+        {compact ? (
+          <button
+            className="secondary-button vault-editor-toggle"
+            type="button"
+            aria-expanded={isEditorVisible}
+            onClick={() => {
+              if (editingId) onCancelEdit();
+              setIsEditorExpanded(!isEditorVisible);
+            }}
+          >
+            {isEditorVisible ? <X size={16} /> : <Plus size={16} />}
+            {isEditorVisible ? "收起录入" : "新增安全速记"}
+          </button>
+        ) : null}
+        <section className="vault-card vault-editor" hidden={!isEditorVisible}>
           <div className="vault-card-heading">
             <strong>{editingId ? "编辑安全速记" : "新增安全速记"}</strong>
             {editingId ? (
