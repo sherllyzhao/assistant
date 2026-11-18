@@ -177,6 +177,22 @@ const viewOptions = [
   { value: "tools", label: "工具库", description: "查询和管理常用小工具" },
 ];
 
+const primaryFeatureOptions = [
+  { value: "assistant", label: "AI工作台", description: "询问今日、本周和项目进展" },
+  { value: "memory", label: "长期记忆", description: "沉淀联系人、项目和排期习惯" },
+  { value: "vault", label: "安全速记", description: "保存账号、密码和密钥" },
+  { value: "report", label: "工作日报", description: "查看日报概览与日志明细" },
+  { value: "tools", label: "工具库", description: "查询和管理常用小工具" },
+];
+
+const featureIcons = {
+  assistant: MessageSquareText,
+  memory: Wand2,
+  vault: ShieldCheck,
+  report: FileText,
+  tools: ListChecks,
+};
+
 const assistantIntentIcons = {
   help: HelpCircle,
   risk: AlertTriangle,
@@ -439,6 +455,7 @@ function App() {
   const [vaultStatus, setVaultStatus] = useState({ type: "", message: "" });
   const [wechatText, setWechatText] = useState("");
   const [activeView, setActiveView] = useState("tasks");
+  const [splitRatio, setSplitRatio] = useState(0.58);
   const [assistantQuestion, setAssistantQuestion] = useState(assistantQuestionPresets[0]);
   const [assistantDraftQuestion, setAssistantDraftQuestion] = useState(assistantQuestionPresets[0]);
   const [taskFilter, setTaskFilter] = useState("active");
@@ -2850,26 +2867,14 @@ function App() {
         tasks={mobileFocusTasks}
       />
 
+      {activeView === "tasks" ? null : (
       <section className="metrics-grid" aria-label="任务概览">
         <Metric icon={<ListChecks size={20} />} label="未完成" value={taskStats.active} />
         <Metric icon={<Bell size={20} />} label="已逾期" value={taskStats.overdue} tone="danger" />
         <Metric icon={<Clock3 size={20} />} label="等待他人" value={taskStats.waiting} />
         <Metric icon={<CheckCircle2 size={20} />} label="已完成" value={taskStats.done} tone="success" />
       </section>
-
-      <section className="view-switcher" aria-label="主入口">
-        {viewOptions.map((option) => (
-          <button
-            key={option.value}
-            className={activeView === option.value || (isSplitView && ["tasks", "vault"].includes(option.value)) ? "is-active" : ""}
-            type="button"
-            onClick={() => setActiveView(option.value)}
-          >
-            <strong>{option.label}</strong>
-            <span>{option.description}</span>
-          </button>
-        ))}
-      </section>
+      )}
 
       {["tasks", "vault", "split"].includes(activeView) ? (
         <section className="workspace-layout-bar" aria-label="工作区布局">
@@ -2892,7 +2897,14 @@ function App() {
         </section>
       ) : null}
 
-      <div id="workspace-layout" className={`workspace-grid ${["profile", "vault", "memory", "connections"].includes(activeView) ? "profile-grid" : ""} ${isSplitView ? "split-workspace" : ""} ${isViewTransitioning ? "is-transitioning" : ""}`}>
+      <div
+        id="workspace-layout"
+        className={`workspace-grid ${["profile", "vault", "memory", "connections"].includes(activeView) ? "profile-grid" : ""} ${activeView === "tasks" ? "tasks-dual-column" : ""} ${isSplitView ? "split-workspace" : ""} ${isViewTransitioning ? "is-transitioning" : ""}`}
+        style={isSplitView ? {
+          "--split-left": `calc(${splitRatio * 100}% - 8px)`,
+          "--split-right": `calc(${(1 - splitRatio) * 100}% - 8px)`,
+        } : undefined}
+      >
         <section
           className="task-area"
           aria-label={
@@ -2913,6 +2925,14 @@ function App() {
         >
           {activeView === "tasks" || isSplitView ? (
             <>
+              {activeView === "tasks" ? (
+                <section className="metrics-grid" aria-label="任务概览">
+                  <Metric icon={<ListChecks size={20} />} label="未完成" value={taskStats.active} />
+                  <Metric icon={<Bell size={20} />} label="已逾期" value={taskStats.overdue} tone="danger" />
+                  <Metric icon={<Clock3 size={20} />} label="等待他人" value={taskStats.waiting} />
+                  <Metric icon={<CheckCircle2 size={20} />} label="已完成" value={taskStats.done} tone="success" />
+                </section>
+              ) : null}
               <div className="section-toolbar">
                 <div>
                   <p className="eyebrow">Task Board</p>
@@ -2982,6 +3002,19 @@ function App() {
                   ))
                 )}
               </div>
+
+              {activeView === "tasks" ? (
+                <div className="connections-entry">
+                  <div>
+                    <strong>外部连接</strong>
+                    <span>管理授权范围和撤销记录</span>
+                  </div>
+                  <button className="secondary-button" type="button" onClick={() => setActiveView("connections")}>
+                    <ExternalLink size={16} />
+                    前往管理
+                  </button>
+                </div>
+              ) : null}
             </>
           ) : activeView === "profile" ? (
               <ProfilePanel
@@ -3073,6 +3106,35 @@ function App() {
         </section>
 
         {isSplitView ? (
+          <div
+            className="split-divider"
+            role="separator"
+            aria-label="调整任务看板与安全速记的分屏宽度"
+            aria-orientation="vertical"
+            aria-valuemin={35}
+            aria-valuemax={70}
+            aria-valuenow={Math.round(splitRatio * 100)}
+            tabIndex={0}
+            onKeyDown={(event) => {
+              if (!["ArrowLeft", "ArrowRight"].includes(event.key)) return;
+              event.preventDefault();
+              const direction = event.key === "ArrowRight" ? 0.02 : -0.02;
+              setSplitRatio((ratio) => Math.min(0.7, Math.max(0.35, ratio + direction)));
+            }}
+            onPointerDown={(event) => event.currentTarget.setPointerCapture(event.pointerId)}
+            onPointerMove={(event) => {
+              if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
+              const bounds = event.currentTarget.parentElement.getBoundingClientRect();
+              const isStacked = window.matchMedia("(max-width: 1100px)").matches;
+              const ratio = isStacked
+                ? (event.clientY - bounds.top) / bounds.height
+                : (event.clientX - bounds.left) / bounds.width;
+              setSplitRatio(Math.min(0.7, Math.max(0.35, ratio)));
+            }}
+          />
+        ) : null}
+
+        {isSplitView ? (
           <section className="task-area split-vault-area" aria-label="安全速记" tabIndex={0}>
             {vaultPanel}
           </section>
@@ -3080,6 +3142,27 @@ function App() {
 
         {["profile", "vault", "memory", "connections", "tools", "split"].includes(activeView) ? null : (
         <aside className="side-rail" aria-label="录入与候选任务">
+          {activeView === "tasks" ? (
+            <section className="feature-grid" aria-label="功能入口">
+              {primaryFeatureOptions.map((option) => {
+                const FeatureIcon = featureIcons[option.value];
+                return (
+                  <button
+                    key={option.value}
+                    className={`feature-card feature-card-${option.value}`}
+                    type="button"
+                    onClick={() => setActiveView(option.value)}
+                  >
+                    {FeatureIcon ? <FeatureIcon size={20} /> : null}
+                    <div>
+                      <strong>{option.label}</strong>
+                      <span>{option.description}</span>
+                    </div>
+                  </button>
+                );
+              })}
+            </section>
+          ) : null}
           <section className="panel">
             <div className="panel-heading">
               <div>

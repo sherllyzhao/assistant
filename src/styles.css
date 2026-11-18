@@ -585,53 +585,6 @@ button:disabled {
   margin-bottom: 16px;
 }
 
-.view-switcher {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
-  margin-bottom: 16px;
-}
-
-.view-switcher button {
-  display: grid;
-  gap: 5px;
-  min-height: 72px;
-  padding: 14px 16px;
-  color: var(--ink);
-  text-align: left;
-  background: rgba(255, 255, 255, 0.82);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-lg);
-  box-shadow: 0 12px 24px rgba(30, 27, 75, 0.06);
-  transition:
-    background 160ms ease,
-    border-color 160ms ease,
-    color 160ms ease,
-    transform 160ms ease;
-}
-
-.view-switcher button:hover,
-.view-switcher button.is-active {
-  background: linear-gradient(135deg, var(--accent-soft), rgba(255, 255, 255, 0.95));
-  border-color: rgba(var(--accent-rgb), 0.45);
-  color: var(--accent-strong);
-  transform: translateY(-1px);
-}
-
-.view-switcher button strong {
-  font-size: 16px;
-}
-
-.view-switcher button span {
-  color: var(--muted);
-  font-size: 13px;
-  line-height: 1.45;
-}
-
-.view-switcher button.is-active span {
-  color: var(--accent-strong);
-}
-
 .metric-card,
 .task-area,
 .panel {
@@ -685,6 +638,240 @@ button:disabled {
 
 .workspace-grid.profile-grid {
   grid-template-columns: 1fr;
+}
+
+.workspace-grid.tasks-dual-column {
+  grid-template-columns: minmax(0, 1fr) 400px;
+  gap: 18px;
+}
+
+.tasks-dual-column .metrics-grid {
+  margin-bottom: 16px;
+}
+
+.tasks-dual-column .feature-grid {
+  grid-template-columns: 1fr;
+  gap: 10px;
+  margin-bottom: 0;
+}
+
+.tasks-dual-column .feature-card {
+  flex-direction: row;
+  align-items: center;
+  padding: 14px 16px;
+}
+
+.connections-entry {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 16px;
+  padding: 14px 16px;
+  background: linear-gradient(135deg, var(--accent-soft), rgba(255, 255, 255, 0.95));
+  border: 1px dashed rgba(var(--accent-rgb), 0.35);
+  border-radius: var(--radius-lg);
+}
+
+.connections-entry > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.connections-entry strong {
+  font-size: 14px;
+}
+
+.connections-entry span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.workspace-layout-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+  padding: 10px 14px;
+  background: rgba(238, 242, 255, 0.72);
+  border: 1px solid rgba(var(--accent-rgb), 0.2);
+  border-radius: var(--radius-md);
+}
+
+.workspace-layout-bar > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.workspace-layout-bar strong {
+  color: var(--accent-strong);
+  font-size: 14px;
+}
+
+.workspace-layout-bar span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.feature-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.feature-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 16px 18px;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow);
+  text-align: left;
+  transition: background 160ms ease, border-color 160ms ease, transform 160ms ease, box-shadow 160ms ease;
+}
+
+.feature-card:hover,
+.feature-card:focus-visible {
+  background: linear-gradient(135deg, var(--accent-soft), rgba(255, 255, 255, 0.95));
+  border-color: rgba(var(--accent-rgb), 0.45);
+  transform: translateY(-2px);
+  box-shadow: 0 16px 36px rgba(30, 27, 75, 0.1);
+}
+
+.feature-card:focus-visible {
+  outline: 2px solid rgba(var(--accent-rgb), 0.36);
+  outline-offset: 2px;
+}
+
+.feature-card svg {
+  flex-shrink: 0;
+  color: var(--accent);
+}
+
+.feature-card > div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+}
+
+.feature-card strong {
+  font-size: 15px;
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.feature-card span {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.feature-card-assistant svg { color: #6366f1; }
+.feature-card-memory svg { color: #8b5cf6; }
+.feature-card-vault svg { color: #06b6d4; }
+.feature-card-report svg { color: #f59e0b; }
+.feature-card-tools svg { color: #22c55e; }
+
+.split-workspace {
+  grid-template-columns: minmax(0, var(--split-left, calc(58% - 8px))) 8px minmax(0, var(--split-right, calc(42% - 8px)));
+  gap: 8px;
+  align-items: stretch;
+}
+
+.split-workspace > .task-area,
+.split-workspace > .split-vault-area {
+  min-height: 680px;
+  max-height: calc(100vh - 190px);
+  overflow: auto;
+  scrollbar-gutter: stable;
+}
+
+.split-divider {
+  position: sticky;
+  top: 24px;
+  align-self: stretch;
+  min-height: 120px;
+  border-radius: var(--radius-pill);
+  background: var(--line);
+  cursor: col-resize;
+  transition: background 160ms ease, transform 160ms ease;
+}
+
+.split-divider::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 4px;
+  height: 42px;
+  border-radius: var(--radius-pill);
+  background: var(--muted);
+  transform: translate(-50%, -50%);
+  opacity: 0.55;
+}
+
+.split-divider:hover,
+.split-divider:focus-visible {
+  background: rgba(var(--accent-rgb), 0.3);
+  outline: none;
+}
+
+.split-divider:focus-visible {
+  box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.14);
+}
+
+.split-vault-area .vault-panel {
+  min-width: 0;
+}
+
+.vault-panel.is-compact {
+  gap: 10px;
+}
+
+.vault-panel.is-compact .vault-guard {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 14px;
+}
+
+.vault-panel.is-compact .vault-guard > div:first-child {
+  flex: 1 1 auto;
+  min-width: 200px;
+}
+
+.vault-panel.is-compact .vault-guard-fields {
+  display: flex;
+  gap: 10px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.vault-panel.is-compact .vault-guard-fields label {
+  flex: 1 1 auto;
+  min-width: 140px;
+}
+
+.vault-panel.is-compact .vault-grid {
+  grid-template-columns: 1fr;
+}
+
+.vault-panel.is-compact .vault-list {
+  max-height: calc(100vh - 320px);
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.vault-editor-toggle {
+  justify-self: start;
 }
 
 .task-area,
@@ -2661,12 +2848,48 @@ textarea:focus {
     grid-template-columns: 1fr;
   }
 
+  .workspace-grid.tasks-dual-column {
+    grid-template-columns: 1fr;
+  }
+
+  .split-workspace {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  .split-workspace > .task-area,
+  .split-workspace > .split-vault-area {
+    min-height: 0;
+    max-height: none;
+    overflow: visible;
+  }
+
+  .split-divider {
+    position: relative;
+    top: auto;
+    width: 100%;
+    min-height: 8px;
+    height: 8px;
+    cursor: row-resize;
+  }
+
+  .split-divider::after {
+    width: 42px;
+    height: 4px;
+  }
+
   .side-rail {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .side-rail .panel:first-child {
+  .side-rail .panel:first-child,
+  .side-rail > .feature-grid,
+  .side-rail > .feature-grid + .panel {
     grid-column: 1 / -1;
+  }
+
+  .feature-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
@@ -2702,6 +2925,10 @@ textarea:focus {
     display: grid;
     gap: 10px;
     margin: 0 0 12px;
+  }
+
+  .feature-grid {
+    grid-template-columns: 1fr;
   }
 
   .mobile-home-heading {
@@ -2886,7 +3113,6 @@ textarea:focus {
   .vault-grid,
   .vault-guard,
   .vault-filters,
-  .view-switcher,
   .metrics-grid {
     grid-template-columns: 1fr;
   }
@@ -2898,7 +3124,6 @@ textarea:focus {
   }
 
   .metrics-grid,
-  .view-switcher,
   .side-rail {
     display: grid;
   }
@@ -3070,32 +3295,6 @@ textarea:focus {
     grid-column: 2;
     font-size: 21px;
     line-height: 1;
-  }
-
-  .view-switcher {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 6px;
-    margin-bottom: 10px;
-    padding: 5px;
-    background: rgba(255, 255, 255, 0.72);
-    border: 1px solid var(--line);
-    border-radius: var(--radius-md);
-  }
-
-  .view-switcher button {
-    min-height: 42px;
-    padding: 0 8px;
-    text-align: center;
-    box-shadow: none;
-  }
-
-  .view-switcher button strong {
-    align-self: center;
-    font-size: 13px;
-  }
-
-  .view-switcher button span {
-    display: none;
   }
 
   .workspace-grid {
